@@ -1,8 +1,45 @@
 """TRPG 战斗管理器 - 单位列表面板（左侧）"""
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from models import Unit
+
+
+class QuickImportDialog(tk.Toplevel):
+    """快速导入弹窗：粘贴骰娘导出文本"""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.result = None
+        self.title("快速导入角色")
+        self.geometry("500x300")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        frame = ttk.Frame(self, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="角色名称:").pack(anchor=tk.W)
+        self.name_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.name_var, width=40).pack(fill=tk.X, pady=(2, 8))
+
+        ttk.Label(frame, text="粘贴骰娘导出文本:").pack(anchor=tk.W)
+        self.text_widget = tk.Text(frame, height=10, width=55, font=("Microsoft YaHei", 9))
+        self.text_widget.pack(fill=tk.BOTH, expand=True, pady=2)
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btn_frame, text="导入", command=self._on_import, width=12).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=self.destroy, width=12).pack(side=tk.RIGHT)
+
+    def _on_import(self):
+        text = self.text_widget.get("1.0", "end-1c").strip()
+        if not text:
+            messagebox.showwarning("提示", "请粘贴导入文本")
+            return
+        self.result = {"text": text, "name": self.name_var.get().strip() or "快速导入角色"}
+        self.destroy()
 
 
 class UnitPanel(ttk.Frame):
@@ -58,6 +95,12 @@ class UnitPanel(ttk.Frame):
         ttk.Button(btn_frame, text="添加怪物", command=lambda: self._add_unit("monster"), width=9).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="编辑单位", command=self._edit_unit, width=9).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="删除单位", command=self._delete_unit, width=9).pack(side=tk.LEFT, padx=2)
+
+        # 第二行：导入按钮
+        import_frame = ttk.Frame(self)
+        import_frame.pack(fill=tk.X, pady=(2, 5))
+        ttk.Button(import_frame, text="导入角色卡 (xlsx)", command=self._import_card, width=18).pack(side=tk.LEFT, padx=2)
+        ttk.Button(import_frame, text="快速导入 (文本)", command=self._import_quick_text, width=18).pack(side=tk.LEFT, padx=2)
 
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._show_detail(self._get_selected_unit()))
 
@@ -153,6 +196,59 @@ class UnitPanel(ttk.Frame):
             self._refresh_trees()
             self._show_detail(None)
             self._notify_change()
+
+    def _import_card(self):
+        filepath = filedialog.askopenfilename(
+            title="选择角色卡文件",
+            filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
+        )
+        if not filepath:
+            return
+
+        try:
+            from character_card import import_character_card
+            unit = import_character_card(filepath)
+        except FileNotFoundError:
+            messagebox.showerror("导入失败", f"文件不存在: {filepath}")
+            return
+        except ValueError as e:
+            messagebox.showerror("导入失败", str(e))
+            return
+        except Exception as e:
+            messagebox.showerror("导入失败", f"无法解析角色卡:\n{e}")
+            return
+
+        if not unit.name or unit.name == "未命名角色":
+            messagebox.showwarning("警告", "未能读取到角色名称，请手动编辑")
+
+        self.units.append(unit)
+        self._refresh_trees()
+        self._notify_change()
+        messagebox.showinfo("导入成功", f"已导入角色: {unit.name}\n"
+                             f"HP: {unit.max_hp}  物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  "
+                             f"精英: {unit.elite_stage}")
+
+    def _import_quick_text(self):
+        """快速导入：从骰娘导出文本中提取属性"""
+        dlg = QuickImportDialog(self.winfo_toplevel())
+        self.wait_window(dlg)
+        if not dlg.result:
+            return
+
+        try:
+            from character_card import import_from_quick_text
+            unit = import_from_quick_text(dlg.result["text"], name=dlg.result["name"])
+        except Exception as e:
+            messagebox.showerror("导入失败", f"无法解析文本:\n{e}")
+            return
+
+        self.units.append(unit)
+        self._refresh_trees()
+        self._notify_change()
+        messagebox.showinfo("导入成功", f"已导入角色: {unit.name}\n"
+                             f"HP: {unit.max_hp}  物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  "
+                             f"速度: {unit.speed}  重量: {unit.weight}\n"
+                             f"(精英化等级未包含在快速导入中，默认为0)")
 
     def _notify_change(self):
         if self.on_units_changed:

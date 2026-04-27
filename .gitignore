@@ -5,3 +5,5 @@ data.json
 .idea/
 *.egg-info/
 工作资料/
+settings.json
+_eval_debug.log
