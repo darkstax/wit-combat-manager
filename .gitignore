@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+data.json
+.vscode/
+.idea/
+*.egg-info/
