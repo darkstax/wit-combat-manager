@@ -13,7 +13,7 @@ class MainWindow:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("TRPG 战斗管理器")
+        self.root.title("WIT 战斗管理器 - Walk In the Terra")
         self.root.geometry("900x650")
         self.root.minsize(800, 550)
 
