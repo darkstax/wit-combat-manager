@@ -1,143 +1,177 @@
-"""TRPG 战斗管理器 - 单位列表面板（左侧）"""
+"""TRPG 战斗管理器 - 单位列表面板 (PySide6)"""
 
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTreeWidget,
+    QTreeWidgetItem, QTextEdit, QRadioButton, QButtonGroup,
+    QFileDialog, QMessageBox, QDialog, QLabel, QLineEdit, QTextEdit as QTextEdit2,
+    QDialogButtonBox,
+)
+from PySide6.QtCore import Signal, Qt
+from PySide6.QtGui import QColor, QBrush
 from models import Unit
 
 
-class QuickImportDialog(tk.Toplevel):
-    """快速导入弹窗：粘贴骰娘导出文本"""
+class QuickImportDialog(QDialog):
+    """快速导入弹窗"""
 
-    def __init__(self, parent):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.result = None
-        self.title("快速导入角色")
-        self.geometry("500x300")
-        self.resizable(False, False)
-        self.transient(parent)
-        self.grab_set()
+        self.setWindowTitle("快速导入角色")
+        self.setMinimumSize(500, 300)
+        self.result_data = None
 
-        frame = ttk.Frame(self, padding=10)
-        frame.pack(fill=tk.BOTH, expand=True)
+        layout = QVBoxLayout(self)
 
-        ttk.Label(frame, text="角色名称:").pack(anchor=tk.W)
-        self.name_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.name_var, width=40).pack(fill=tk.X, pady=(2, 8))
+        layout.addWidget(QLabel("角色名称:"))
+        self.name_edit = QLineEdit()
+        layout.addWidget(self.name_edit)
 
-        ttk.Label(frame, text="粘贴骰娘导出文本:").pack(anchor=tk.W)
-        self.text_widget = tk.Text(frame, height=10, width=55, font=("Microsoft YaHei", 9))
-        self.text_widget.pack(fill=tk.BOTH, expand=True, pady=2)
+        layout.addWidget(QLabel("粘贴骰娘导出文本:"))
+        self.text_edit = QTextEdit2()
+        layout.addWidget(self.text_edit)
 
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=(10, 0))
-        ttk.Button(btn_frame, text="导入", command=self._on_import, width=12).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(btn_frame, text="取消", command=self.destroy, width=12).pack(side=tk.RIGHT)
+        buttons = QDialogButtonBox()
+        import_btn = QPushButton("导入")
+        cancel_btn = QPushButton("取消")
+        buttons.addButton(import_btn, buttons.ActionRole)
+        buttons.addButton(cancel_btn, buttons.RejectRole)
+        import_btn.clicked.connect(self._on_import)
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(buttons)
 
     def _on_import(self):
-        text = self.text_widget.get("1.0", "end-1c").strip()
+        text = self.text_edit.toPlainText().strip()
         if not text:
-            messagebox.showwarning("提示", "请粘贴导入文本")
+            QMessageBox.warning(self, "提示", "请粘贴导入文本")
             return
-        self.result = {"text": text, "name": self.name_var.get().strip() or "快速导入角色"}
-        self.destroy()
+        self.result_data = {
+            "text": text,
+            "name": self.name_edit.text().strip() or "快速导入角色",
+        }
+        self.accept()
 
 
-class UnitPanel(ttk.Frame):
-    """单位管理面板：玩家/怪物统一列表 + 详情显示"""
+class UnitPanel(QWidget):
+    units_changed = Signal(list)
 
-    def __init__(self, parent, on_units_changed=None):
-        super().__init__(parent, padding=5)
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.units: list[Unit] = []
-        self.on_units_changed = on_units_changed
 
-        # 类型筛选
-        filter_frame = ttk.Frame(self)
-        filter_frame.pack(fill=tk.X, pady=(0, 3))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
-        ttk.Label(filter_frame, text="筛选:").pack(side=tk.LEFT)
-        self.filter_var = tk.StringVar(value="全部")
+        # 筛选
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("筛选:"))
+        self.filter_group = QButtonGroup(self)
         for label, val in [("全部", "全部"), ("玩家", "player"), ("怪物", "monster")]:
-            ttk.Radiobutton(filter_frame, text=label, variable=self.filter_var,
-                            value=val, command=self._refresh_trees).pack(side=tk.LEFT, padx=5)
+            rb = QRadioButton(label)
+            self.filter_group.addButton(rb)
+            filter_layout.addWidget(rb)
+            if val == "全部":
+                rb.setChecked(True)
+                rb.val = val
+            else:
+                rb.val = val
+            rb.toggled.connect(self._refresh_tree)
+        filter_layout.addStretch()
+        layout.addLayout(filter_layout)
 
-        # 统一列表
-        columns = ("type", "name", "hp", "speed", "tenacity")
-        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=8)
-        self.tree.heading("type", text="类型")
-        self.tree.heading("name", text="名称")
-        self.tree.heading("hp", text="HP")
-        self.tree.heading("speed", text="速度")
-        self.tree.heading("tenacity", text="韧性")
-        self.tree.column("type", width=45, anchor=tk.CENTER)
-        self.tree.column("name", width=100)
-        self.tree.column("hp", width=65, anchor=tk.CENTER)
-        self.tree.column("speed", width=50, anchor=tk.CENTER)
-        self.tree.column("tenacity", width=65, anchor=tk.CENTER)
-        self.tree.pack(fill=tk.X)
+        # 单位列表
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["类型", "名称", "HP", "速度", "韧性"])
+        self.tree.setColumnWidth(0, 45)
+        self.tree.setColumnWidth(1, 110)
+        self.tree.setColumnWidth(2, 65)
+        self.tree.setColumnWidth(3, 50)
+        self.tree.setColumnWidth(4, 65)
+        self.tree.setMaximumHeight(175)
+        self.tree.currentItemChanged.connect(self._on_select)
+        layout.addWidget(self.tree)
 
-        # 行颜色标记
-        self.tree.tag_configure("player", background="#d4e6f1")
-        self.tree.tag_configure("monster", background="#f5d4d4")
+        # 详情
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setMinimumHeight(130)
+        layout.addWidget(self.detail_text)
 
-        # 详情面板
-        detail_frame = ttk.LabelFrame(self, text="选中单位详情", padding=5)
-        detail_frame.pack(fill=tk.X, pady=5)
+        # 按钮行 1
+        btn1 = QHBoxLayout()
+        for text, slot in [
+            ("添加玩家", lambda: self._add_unit("player")),
+            ("添加怪物", lambda: self._add_unit("monster")),
+            ("编辑单位", self._edit_unit),
+            ("删除单位", self._delete_unit),
+        ]:
+            btn = QPushButton(text)
+            btn.clicked.connect(slot)
+            btn1.addWidget(btn)
+        layout.addLayout(btn1)
 
-        self.detail_text = tk.Text(detail_frame, height=12, width=32, state=tk.DISABLED,
-                                   font=("Microsoft YaHei", 9))
-        self.detail_text.pack(fill=tk.X)
+        # 按钮行 2 — 导入
+        btn2 = QHBoxLayout()
+        import_btn = QPushButton("导入角色卡 (xlsx)")
+        import_btn.clicked.connect(self._import_card)
+        btn2.addWidget(import_btn)
+        quick_btn = QPushButton("快速导入 (文本)")
+        quick_btn.clicked.connect(self._import_quick_text)
+        btn2.addWidget(quick_btn)
+        layout.addLayout(btn2)
 
-        # 操作按钮
-        btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill=tk.X, pady=5)
+    # ============================================================
+    # 数据
+    # ============================================================
 
-        ttk.Button(btn_frame, text="添加玩家", command=lambda: self._add_unit("player"), width=9).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="添加怪物", command=lambda: self._add_unit("monster"), width=9).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="编辑单位", command=self._edit_unit, width=9).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="删除单位", command=self._delete_unit, width=9).pack(side=tk.LEFT, padx=2)
-
-        # 第二行：导入按钮
-        import_frame = ttk.Frame(self)
-        import_frame.pack(fill=tk.X, pady=(2, 5))
-        ttk.Button(import_frame, text="导入角色卡 (xlsx)", command=self._import_card, width=18).pack(side=tk.LEFT, padx=2)
-        ttk.Button(import_frame, text="快速导入 (文本)", command=self._import_quick_text, width=18).pack(side=tk.LEFT, padx=2)
-
-        self.tree.bind("<<TreeviewSelect>>", lambda e: self._show_detail(self._get_selected_unit()))
-
-    # ---- 数据加载 ----
     def load_units(self, units: list[Unit]):
         self.units = units
-        self._refresh_trees()
+        self._refresh_tree()
 
-    def _refresh_trees(self):
-        self.tree.delete(*self.tree.get_children())
-        f = self.filter_var.get()
+    def _refresh_tree(self):
+        self.tree.clear()
+        f = None
+        for rb in self.filter_group.buttons():
+            if rb.isChecked():
+                f = rb.val
+                break
         for u in self.units:
             if f != "全部" and u.unit_type != f:
                 continue
             type_label = "玩家" if u.unit_type == "player" else "怪物"
-            tag = u.unit_type
-            self.tree.insert("", tk.END, iid=u.unit_id,
-                             values=(type_label, u.name, f"{u.current_hp}/{u.max_hp}",
-                                     u.speed, f"{u.elemental_tenacity_current}/{u.elemental_tenacity_max}"),
-                             tags=(tag,))
+            item = QTreeWidgetItem([
+                type_label, u.name,
+                f"{u.current_hp}/{u.max_hp}",
+                str(u.speed),
+                f"{u.elemental_tenacity_current}/{u.elemental_tenacity_max}",
+            ])
+            item.unit_id = u.unit_id
+            if u.unit_type == "player":
+                item.setBackground(0, QBrush(QColor("#d4e6f1")))
+            else:
+                item.setBackground(0, QBrush(QColor("#f5d4d4")))
+            self.tree.addTopLevelItem(item)
 
     def _get_selected_unit(self) -> Unit | None:
-        sel = self.tree.selection()
-        if not sel:
+        item = self.tree.currentItem()
+        if not item:
             return None
         for u in self.units:
-            if u.unit_id == sel[0]:
+            if u.unit_id == item.unit_id:
                 return u
         return None
 
-    # ---- 详情显示 ----
+    def _on_select(self):
+        self._show_detail(self._get_selected_unit())
+
+    # ============================================================
+    # 详情
+    # ============================================================
+
     def _show_detail(self, unit: Unit | None):
-        self.detail_text.configure(state=tk.NORMAL)
-        self.detail_text.delete("1.0", tk.END)
+        self.detail_text.clear()
         if not unit:
-            self.detail_text.insert("1.0", "请选择一个单位")
-            self.detail_text.configure(state=tk.DISABLED)
+            self.detail_text.setPlainText("请选择一个单位")
             return
 
         type_label = "玩家" if unit.unit_type == "player" else "怪物"
@@ -159,102 +193,110 @@ class UnitPanel(ttk.Frame):
             f"当前爆发: {burst_info}",
             f"状态: {status_text}",
         ]
-        self.detail_text.insert("1.0", "\n".join(lines))
-        self.detail_text.configure(state=tk.DISABLED)
+        self.detail_text.setPlainText("\n".join(lines))
 
-    # ---- 按钮操作 ----
+    # ============================================================
+    # 按钮操作
+    # ============================================================
+
     def _add_unit(self, unit_type: str = "player"):
         from ui.unit_dialog import UnitDialog
         unit = Unit(unit_type=unit_type)
-        dlg = UnitDialog(self.winfo_toplevel(), unit)
-        self.wait_window(dlg)
-        if dlg.result:
+        dlg = UnitDialog(unit, self)
+        if dlg.exec() == UnitDialog.Accepted and dlg.result:
             self.units.append(dlg.result)
-            self._refresh_trees()
+            self._refresh_tree()
             self._notify_change()
 
     def _edit_unit(self):
         unit = self._get_selected_unit()
         if not unit:
-            messagebox.showinfo("提示", "请先选择一个单位")
+            QMessageBox.information(self, "提示", "请先选择一个单位")
             return
         from ui.unit_dialog import UnitDialog
-        dlg = UnitDialog(self.winfo_toplevel(), unit)
-        self.wait_window(dlg)
-        if dlg.result:
-            self._refresh_trees()
+        dlg = UnitDialog(unit, self)
+        if dlg.exec() == UnitDialog.Accepted and dlg.result:
+            self._refresh_tree()
             self._show_detail(dlg.result)
             self._notify_change()
 
     def _delete_unit(self):
         unit = self._get_selected_unit()
         if not unit:
-            messagebox.showinfo("提示", "请先选择一个单位")
+            QMessageBox.information(self, "提示", "请先选择一个单位")
             return
-        if messagebox.askyesno("确认删除", f"确定要删除「{unit.name}」吗？"):
+        reply = QMessageBox.question(
+            self, "确认删除", f"确定要删除「{unit.name}」吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
             self.units.remove(unit)
-            self._refresh_trees()
+            self._refresh_tree()
             self._show_detail(None)
             self._notify_change()
 
     def _import_card(self):
-        filepath = filedialog.askopenfilename(
-            title="选择角色卡文件",
-            filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "选择角色卡文件", "",
+            "Excel 文件 (*.xlsx);;所有文件 (*.*)"
         )
         if not filepath:
             return
-
         try:
             from character_card import import_character_card
             unit = import_character_card(filepath)
         except FileNotFoundError:
-            messagebox.showerror("导入失败", f"文件不存在: {filepath}")
+            QMessageBox.critical(self, "导入失败", f"文件不存在: {filepath}")
             return
         except ValueError as e:
-            messagebox.showerror("导入失败", str(e))
+            QMessageBox.critical(self, "导入失败", str(e))
             return
         except Exception as e:
-            messagebox.showerror("导入失败", f"无法解析角色卡:\n{e}")
+            QMessageBox.critical(self, "导入失败", f"无法解析角色卡:\n{e}")
             return
 
         if not unit.name or unit.name == "未命名角色":
-            messagebox.showwarning("警告", "未能读取到角色名称，请手动编辑")
+            QMessageBox.warning(self, "警告", "未能读取到角色名称，请手动编辑")
 
         self.units.append(unit)
-        self._refresh_trees()
+        self._refresh_tree()
         self._notify_change()
-        messagebox.showinfo("导入成功", f"已导入角色: {unit.name}\n"
-                             f"HP: {unit.max_hp}  物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  "
-                             f"精英: {unit.elite_stage}")
+        QMessageBox.information(
+            self, "导入成功",
+            f"已导入角色: {unit.name}\n"
+            f"HP: {unit.max_hp}  物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  "
+            f"精英: {unit.elite_stage}"
+        )
 
     def _import_quick_text(self):
-        """快速导入：从骰娘导出文本中提取属性"""
-        dlg = QuickImportDialog(self.winfo_toplevel())
-        self.wait_window(dlg)
-        if not dlg.result:
+        dlg = QuickImportDialog(self)
+        if dlg.exec() != QDialog.Accepted or not dlg.result_data:
             return
-
         try:
             from character_card import import_from_quick_text
-            unit = import_from_quick_text(dlg.result["text"], name=dlg.result["name"])
+            unit = import_from_quick_text(dlg.result_data["text"], name=dlg.result_data["name"])
         except Exception as e:
-            messagebox.showerror("导入失败", f"无法解析文本:\n{e}")
+            QMessageBox.critical(self, "导入失败", f"无法解析文本:\n{e}")
             return
 
         self.units.append(unit)
-        self._refresh_trees()
+        self._refresh_tree()
         self._notify_change()
-        messagebox.showinfo("导入成功", f"已导入角色: {unit.name}\n"
-                             f"HP: {unit.max_hp}  物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  "
-                             f"速度: {unit.speed}  重量: {unit.weight}\n"
-                             f"(精英化等级未包含在快速导入中，默认为0)")
+        QMessageBox.information(
+            self, "导入成功",
+            f"已导入角色: {unit.name}\n"
+            f"HP: {unit.max_hp}  物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  "
+            f"速度: {unit.speed}  重量: {unit.weight}\n"
+            f"(精英化等级未包含在快速导入中，默认为0)"
+        )
 
     def _notify_change(self):
-        if self.on_units_changed:
-            self.on_units_changed(self.units)
+        self.units_changed.emit(self.units)
 
-    # ---- 公共方法 ----
+    # ============================================================
+    # 公共接口
+    # ============================================================
+
     def get_players(self) -> list[Unit]:
         return [u for u in self.units if u.unit_type == "player"]
 
