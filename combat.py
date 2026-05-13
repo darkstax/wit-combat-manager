@@ -8,7 +8,9 @@ from models import (
     COUNTER_BUFFS, END_OF_HEAL_BUFFS, END_OF_HEAL_EFFECT_DEBUFFS,
     END_OF_ACTIVATION, END_OF_MOVE_PREP,
     ELITE_TENACITY, ELEMENTAL_BURST_EFFECTS,
+    X_STATUSES,
 )
+from combat_report import DamageReport, HealingReport, StatusReport, ElementalReport
 
 # ============================================================
 # 先攻系统
@@ -104,145 +106,290 @@ def _resolve_ties(units: list[Unit], rolls: dict[str, int], roll_func, max_attem
 # 伤害系统
 # ============================================================
 
-def apply_damage(unit: Unit, amount: int, dmg_type: str = "物理",
-                 is_attack: bool = True) -> str:
-    """造成伤害。dmg_type: "物理" | "法术" | "真实"。辅助骰默认d4。"""
+def _calc_damage(unit: Unit, amount: int, dmg_type: str, is_attack: bool) -> DamageReport:
+    """纯计算：读 unit 状态，返回 DamageReport，不修改 unit"""
+    report = DamageReport(raw_amount=amount, hp_before=unit.current_hp, hp_after=unit.current_hp)
+
     if amount <= 0:
-        return f"{unit.name} 未受到伤害"
+        return report
 
-    if dmg_type == "真实":
-        return _apply_true_damage(unit, amount)
-
-    # 物理/法术 → 先检查护盾
+    # 护盾
     shield = unit.get_status("护盾")
     if shield and shield["stacks"] > 0:
-        shield["stacks"] -= 1
-        if shield["stacks"] <= 0:
-            unit.remove_status("护盾")
-        return f"{unit.name} 的护盾抵消了本次攻击（剩余{shield['stacks']}次）"
+        report.blocked_by_shield = True
+        report.shield_remaining = shield["stacks"] - 1
+        return report
 
-    # 计算抗性减免
+    # 抗性减免
     resist = unit.physical_resist if dmg_type == "物理" else unit.magic_resist
-    # 注意：侵蚀/灼燃爆发额外伤害由骰娘生成后GM手动填入
-
+    report.resist_reduced = resist
     final_dmg = max(0, amount - resist)
 
     # 伤害强化
     dmg_boost = unit.get_status("伤害强化")
     if dmg_boost and dmg_boost["stacks"] > 0:
+        report.dmg_boost_added = dmg_boost["stacks"]
         final_dmg += dmg_boost["stacks"]
 
     # 脆弱
     vuln = unit.get_status("脆弱")
     if vuln and vuln["stacks"] > 0:
+        report.vuln_added = vuln["stacks"]
         final_dmg += vuln["stacks"]
 
-    # 屏障：先扣临时HP，同时减少屏障X计数
+    # 屏障吸收临时HP
     barrier = unit.get_status("屏障")
     if unit.temp_hp > 0:
         absorbed = min(final_dmg, unit.temp_hp)
-        unit.temp_hp -= absorbed
+        report.barrier_absorbed = absorbed
+        report.temp_hp_after = unit.temp_hp - absorbed
         final_dmg -= absorbed
-        # 每次屏障生效 → X-1
         if barrier and barrier["stacks"] > 0:
+            if barrier["stacks"] - 1 <= 0:
+                report.barrier_depleted = True
+    else:
+        report.temp_hp_after = unit.temp_hp
+
+    report.final_damage = final_dmg
+    report.hp_before = unit.current_hp
+    report.hp_after = max(0, unit.current_hp - final_dmg)
+    report.is_dying = (report.hp_before > 0 and report.hp_after == 0)
+
+    if is_attack and unit.has_status("睡眠"):
+        report.sleep_broken = True
+
+    if is_attack:
+        report.attack_buffs_cleared = [s for s in END_OF_ATTACK_BUFFS if unit.has_status(s)]
+
+    return report
+
+
+def _calc_true_damage(unit: Unit, amount: int) -> DamageReport:
+    """纯计算：真实伤害，不修改 unit"""
+    report = DamageReport(raw_amount=amount, resist_reduced=0)
+    final_dmg = amount
+
+    barrier = unit.get_status("屏障")
+    if unit.temp_hp > 0:
+        absorbed = min(final_dmg, unit.temp_hp)
+        report.barrier_absorbed = absorbed
+        report.temp_hp_after = unit.temp_hp - absorbed
+        final_dmg -= absorbed
+        if barrier and barrier["stacks"] > 0:
+            if barrier["stacks"] - 1 <= 0:
+                report.barrier_depleted = True
+    else:
+        report.temp_hp_after = unit.temp_hp
+
+    report.final_damage = final_dmg
+    report.hp_before = unit.current_hp
+    report.hp_after = max(0, unit.current_hp - final_dmg)
+    report.is_dying = (report.hp_before > 0 and report.hp_after == 0)
+
+    return report
+
+
+def apply_damage(unit: Unit, amount: int, dmg_type: str = "物理",
+                 is_attack: bool = True) -> str:
+    """造成伤害。dmg_type: "物理" | "法术" | "真实"。"""
+    if amount <= 0:
+        return f"{unit.name} 未受到伤害"
+
+    if dmg_type == "真实":
+        report = _calc_true_damage(unit, amount)
+        _apply_true_damage_mutations(unit, report)
+        return _format_true_damage_result(unit, report)
+    else:
+        report = _calc_damage(unit, amount, dmg_type, is_attack)
+        _apply_damage_mutations(unit, report, is_attack)
+        return _format_damage_result(unit, report, dmg_type)
+
+
+def _apply_damage_mutations(unit: Unit, r: DamageReport, is_attack: bool):
+    """根据 DamageReport 对 unit 执行状态变更"""
+    if r.blocked_by_shield:
+        shield = unit.get_status("护盾")
+        if shield:
+            shield["stacks"] -= 1
+            if shield["stacks"] <= 0:
+                unit.remove_status("护盾")
+        return
+
+    if r.barrier_absorbed > 0:
+        unit.temp_hp = r.temp_hp_after
+        barrier = unit.get_status("屏障")
+        if barrier:
             barrier["stacks"] -= 1
-            if barrier["stacks"] <= 0:
+            if r.barrier_depleted:
                 unit.remove_status("屏障")
-                unit.temp_hp = 0  # 屏障耗尽，清除剩余临时HP
+                unit.temp_hp = 0
 
-    unit.current_hp = max(0, unit.current_hp - final_dmg)
+    unit.current_hp = r.hp_after
 
-    result = f"{unit.name} 受到 {final_dmg} 点{dmg_type}伤害（HP: {unit.current_hp}/{unit.max_hp}"
+    if r.sleep_broken:
+        unit.remove_status("睡眠")
+
+    if is_attack:
+        for name in r.attack_buffs_cleared:
+            unit.remove_status(name)
+
+
+def _format_damage_result(unit: Unit, r: DamageReport, dmg_type: str) -> str:
+    if r.blocked_by_shield:
+        return f"{unit.name} 的护盾抵消了本次攻击（剩余{r.shield_remaining}次）"
+
+    result = f"{unit.name} 受到 {r.final_damage} 点{dmg_type}伤害（HP: {r.hp_after}/{unit.max_hp}"
     if unit.temp_hp > 0:
         result += f", 临时HP: {unit.temp_hp}"
     result += "）"
 
-    # 睡眠因HP受损而结束
-    if is_attack and unit.has_status("睡眠"):
-        unit.remove_status("睡眠")
+    if r.is_dying:
+        result += f"\n!!! {unit.name} HP归零，陷入濒死状态 !!!"
+    if r.sleep_broken:
         result += f"\n{unit.name} 的「睡眠」因受到攻击而解除"
-
-    # 攻击后处理攻击类BUFF结束
-    if is_attack:
-        result2 = process_end_attack(unit)
-        if result2:
-            result += "\n" + result2
+    if r.attack_buffs_cleared:
+        result += f"\n{unit.name} 攻击后清除了: {'、'.join(r.attack_buffs_cleared)}"
 
     return result
 
 
 def _apply_true_damage(unit: Unit, amount: int) -> str:
-    """真实伤害：无视护盾和抗性，但屏障仍然吸收"""
-    if unit.temp_hp > 0:
-        absorbed = min(amount, unit.temp_hp)
-        unit.temp_hp -= absorbed
-        amount -= absorbed
+    """真实伤害：无视护盾和抗性，但屏障仍然吸收（保留兼容，内部委托）"""
+    report = _calc_true_damage(unit, amount)
+    _apply_true_damage_mutations(unit, report)
+    return _format_true_damage_result(unit, report)
+
+
+def _apply_true_damage_mutations(unit: Unit, r: DamageReport):
+    if r.barrier_absorbed > 0:
+        unit.temp_hp = r.temp_hp_after
         barrier = unit.get_status("屏障")
-        if barrier and barrier["stacks"] > 0:
+        if barrier:
             barrier["stacks"] -= 1
-            if barrier["stacks"] <= 0:
+            if r.barrier_depleted:
                 unit.remove_status("屏障")
                 unit.temp_hp = 0
+    unit.current_hp = r.hp_after
 
-    unit.current_hp = max(0, unit.current_hp - amount)
-    return f"{unit.name} 受到 {amount} 点真实伤害（HP: {unit.current_hp}/{unit.max_hp}）"
+
+def _format_true_damage_result(unit: Unit, r: DamageReport) -> str:
+    msg = f"{unit.name} 受到 {r.final_damage} 点真实伤害（HP: {r.hp_after}/{unit.max_hp}）"
+    if r.is_dying:
+        msg += f"\n!!! {unit.name} HP归零，陷入濒死状态 !!!"
+    return msg
+
+
+def _calc_healing(unit: Unit, amount: int) -> HealingReport:
+    """纯计算：读 unit 状态，不修改 unit"""
+    report = HealingReport()
+
+    if unit.has_status("禁疗"):
+        report.blocked_by_regen_block = True
+        return report
+
+    if unit.has_status("亲和"):
+        report.affinity_consumed = True
+
+    report.hp_before = unit.current_hp
+    report.hp_after = min(unit.max_hp, unit.current_hp + amount)
+    report.healed = report.hp_after - report.hp_before
+    report.heal_effect_cleared = [s for s in END_OF_HEAL_EFFECT_DEBUFFS if unit.has_status(s)]
+
+    return report
 
 
 def apply_healing(unit: Unit, amount: int) -> str:
     """治疗：受禁疗影响则失效，亲和增加d4"""
-    if unit.has_status("禁疗"):
-        return f"{unit.name} 受到「禁疗」影响，治疗失效"
+    report = _calc_healing(unit, amount)
+    _apply_healing_mutations(unit, report)
+    return _format_healing_result(unit, report)
 
-    # 亲和：治疗来源检定骰面升级（骰娘已计入数值）
-    if unit.has_status("亲和"):
+
+def _apply_healing_mutations(unit: Unit, r: HealingReport):
+    if r.blocked_by_regen_block:
+        return
+    if r.affinity_consumed:
         unit.remove_status("亲和")
+    unit.current_hp = r.hp_after
+    for name in r.heal_effect_cleared:
+        unit.remove_status(name)
 
-    old_hp = unit.current_hp
-    unit.current_hp = min(unit.max_hp, unit.current_hp + amount)
-    healed = unit.current_hp - old_hp
 
-    result = f"{unit.name} 恢复了 {healed} 点生命（HP: {unit.current_hp}/{unit.max_hp}）"
-
-    process_end_heal_effect(unit)
-
-    return result
+def _format_healing_result(unit: Unit, r: HealingReport) -> str:
+    if r.blocked_by_regen_block:
+        return f"{unit.name} 受到「禁疗」影响，治疗失效"
+    return f"{unit.name} 恢复了 {r.healed} 点生命（HP: {r.hp_after}/{unit.max_hp}）"
 
 
 # ============================================================
 # 元素损伤系统
 # ============================================================
 
+def _calc_elemental(unit: Unit, amount: int, elem_type: str) -> ElementalReport:
+    """纯计算：读 unit 状态，不修改 unit"""
+    report = ElementalReport()
+
+    if unit.is_in_burst():
+        report.is_burst_period = True
+        report.true_dmg_dealt = amount * 3
+        return report
+
+    remaining = amount
+    elem_barrier = unit.get_status("元素屏障")
+    if elem_barrier and elem_barrier["stacks"] > 0:
+        absorbed = min(remaining, elem_barrier["stacks"])
+        report.barrier_absorbed = absorbed
+        remaining -= absorbed
+        if elem_barrier["stacks"] - absorbed <= 0:
+            report.barrier_depleted = True
+
+    if remaining > 0:
+        report.tenacity_before = unit.elemental_tenacity_current
+        reduced = min(remaining, unit.elemental_tenacity_current)
+        report.tenacity_reduced = reduced
+        report.tenacity_after = unit.elemental_tenacity_current - reduced
+        if report.tenacity_after <= 0 and elem_type in ELEMENTAL_BURST_EFFECTS:
+            report.burst_triggered = True
+            report.burst_type = elem_type
+            report.burst_statuses = list(ELEMENTAL_BURST_EFFECTS[elem_type]["statuses"])
+    else:
+        report.tenacity_before = unit.elemental_tenacity_current
+        report.tenacity_after = unit.elemental_tenacity_current
+
+    return report
+
+
 def apply_elemental_damage(unit: Unit, amount: int, elem_type: str) -> str:
     """施加元素损伤"""
+    report = _calc_elemental(unit, amount, elem_type)
+    return _apply_elemental_mutations(unit, report, amount, elem_type)
 
-    # 爆发期间 → 3x真实伤害
-    if unit.is_in_burst():
+
+def _apply_elemental_mutations(unit: Unit, r: ElementalReport, amount: int, elem_type: str) -> str:
+    if r.is_burst_period:
         true_dmg = amount * 3
         msg = _apply_true_damage(unit, true_dmg)
         return f"[爆发期间] {unit.name} 的元素损伤转为 {true_dmg} 点真实伤害\n{msg}"
 
-    # 元素屏障：吸收元素损伤
-    elem_barrier = unit.get_status("元素屏障")
-    if elem_barrier and elem_barrier["stacks"] > 0:
-        absorbed = min(amount, elem_barrier["stacks"])
-        elem_barrier["stacks"] -= absorbed
-        amount -= absorbed
-        result = f"{unit.name} 的元素屏障吸收了 {absorbed} 点{elem_type}"
-        if elem_barrier["stacks"] <= 0:
+    result = ""
+    if r.barrier_absorbed > 0:
+        elem_barrier = unit.get_status("元素屏障")
+        if elem_barrier:
+            elem_barrier["stacks"] -= r.barrier_absorbed
+        result = f"{unit.name} 的元素屏障吸收了 {r.barrier_absorbed} 点{elem_type}"
+        if r.barrier_depleted:
             unit.remove_status("元素屏障")
             result += "（元素屏障耗尽）"
-        if amount <= 0:
+        if r.tenacity_reduced <= 0:
             return result
-    else:
-        result = ""
 
-    # 正常：减少元素韧性
-    overflow = unit.reduce_tenacity(amount)
-    result += f"\n{unit.name} 受到 {amount} 点{elem_type}（韧性: {unit.elemental_tenacity_current}/{unit.elemental_tenacity_max}）"
+    if r.tenacity_reduced > 0:
+        unit.reduce_tenacity(r.tenacity_reduced)
+        result += f"\n{unit.name} 受到 {r.tenacity_reduced} 点{elem_type}（韧性: {unit.elemental_tenacity_current}/{unit.elemental_tenacity_max}）"
 
-    if unit.elemental_tenacity_current <= 0:
-        burst_msgs = trigger_elemental_burst(unit, elem_type)
-        result += "\n" + burst_msgs
+        if r.burst_triggered:
+            burst_msgs = trigger_elemental_burst(unit, elem_type)
+            result += "\n" + burst_msgs
 
     return result.strip()
 
@@ -284,68 +431,147 @@ def recover_burst(unit: Unit) -> list[str]:
 # 状态系统
 # ============================================================
 
-def apply_status(unit: Unit, status_name: str, stacks: int = 0) -> str:
-    """
-    施加状态效果。带X的状态会叠加层数（如护盾2+护盾3=护盾5）。
-    """
-    # 免疫
-    if unit.has_status("免疫"):
-        return f"{unit.name} 的「免疫」阻挡了「{status_name}」"
+def _calc_status(unit: Unit, status_name: str, stacks: int = 0) -> StatusReport:
+    """纯计算：读 unit 状态，返回 StatusReport，不修改 unit"""
+    report = StatusReport(status_name=status_name, stacks_delta=stacks)
 
-    # 抵抗
+    if unit.has_status("免疫"):
+        report.blocked_by_immune = True
+        return report
+
     resist = unit.get_status("抵抗")
     if resist and resist["stacks"] > 0:
-        resist["stacks"] -= 1
-        if resist["stacks"] <= 0:
-            unit.remove_status("抵抗")
-        return f"{unit.name} 消耗一次「抵抗」无效了「{status_name}」（剩余{resist['stacks']}次）"
+        report.blocked_by_resist = True
+        report.resist_remaining = resist["stacks"] - 1
+        return report
 
-    # 标记特殊处理
     if status_name == "标记":
-        return _apply_mark(unit)
+        report.is_mark = True
+        report.simple_applied = True
+        for sub in ["停顿", "寒冷", "困倦"]:
+            if sub in STATUS_UPGRADE:
+                upgraded = STATUS_UPGRADE[sub]
+                if not unit.has_status(upgraded) and unit.has_status(sub):
+                    report.mark_sub_triggers.append(f"{sub}→{upgraded}")
+        return report
 
-    # 升级链
     if status_name in STATUS_UPGRADE:
         upgraded = STATUS_UPGRADE[status_name]
         if unit.has_status(upgraded):
-            return f"{unit.name} 已有「{upgraded}」，「{status_name}」不叠加"
+            report.already_exists = True
+            return report
         if unit.has_status(status_name):
-            unit.remove_status(status_name)
-            while unit.has_status(status_name):
-                unit.remove_status(status_name)
-            unit.add_status(upgraded)
-            return f"{unit.name} 的「{status_name}」升级为「{upgraded}」！"
-        else:
-            unit.add_status(status_name)
-            return f"{unit.name} 获得了「{status_name}」"
+            report.upgraded = True
+            report.upgraded_from = status_name
+            report.upgraded_to = upgraded
+            return report
+        report.simple_applied = True
+        return report
 
-    # X型状态：叠层（additive stacking）
-    X_STATUSES = ["伤害强化", "护盾", "屏障", "抵抗", "元素屏障", "脆弱", "失重"]
-    if status_name in X_STATUSES and stacks > 0:
+    if status_name in X_STATUSES:
         existing = unit.get_status(status_name)
-        if existing:
-            existing["stacks"] += stacks
-            return f"{unit.name} 的「{status_name}」层数 +{stacks} → 当前 {existing['stacks']} 层"
+        if stacks > 0:
+            if existing:
+                report.stacked = True
+                report.stacks_before = existing["stacks"]
+                report.stacks_after = existing["stacks"] + stacks
+            else:
+                report.simple_applied = True
+                report.stacks_after = stacks
         else:
-            unit.add_status(status_name, stacks)
-            return f"{unit.name} 获得了「{status_name}{stacks}」({stacks}层)"
-    elif status_name in X_STATUSES:
-        # stacks=0 → 施加1层
-        existing = unit.get_status(status_name)
-        if existing:
-            existing["stacks"] += 1
-            return f"{unit.name} 的「{status_name}」层数 +1 → 当前 {existing['stacks']} 层"
-        else:
-            unit.add_status(status_name, 1)
-            return f"{unit.name} 获得了「{status_name}1」(1层)"
+            if existing:
+                report.stacked = True
+                report.stacks_before = existing["stacks"]
+                report.stacks_after = existing["stacks"] + 1
+                report.stacks_delta = 1
+            else:
+                report.simple_applied = True
+                report.stacks_after = 1
+                report.stacks_delta = 1
+        return report
 
-    # 非X型状态
     if unit.has_status(status_name):
-        return f"{unit.name} 已有「{status_name}」，不重复添加"
+        report.already_exists = True
+        return report
 
-    unit.add_status(status_name, stacks)
-    stacks_text = str(stacks) if stacks > 0 else ""
-    return f"{unit.name} 获得了「{status_name}{stacks_text}」"
+    report.simple_applied = True
+    return report
+
+
+def apply_status(unit: Unit, status_name: str, stacks: int = 0) -> str:
+    """施加状态效果。带X的状态会叠加层数。"""
+    report = _calc_status(unit, status_name, stacks)
+    _apply_status_mutations(unit, report)
+    return _format_status_result(unit, report)
+
+
+def _apply_status_mutations(unit: Unit, r: StatusReport):
+    if r.blocked_by_immune or r.blocked_by_resist:
+        if r.blocked_by_resist:
+            resist = unit.get_status("抵抗")
+            if resist:
+                resist["stacks"] -= 1
+                if resist["stacks"] <= 0:
+                    unit.remove_status("抵抗")
+        return
+
+    if r.is_mark:
+        unit.add_status("标记")
+        for trigger in r.mark_sub_triggers:
+            sub = trigger.split("→")[0]
+            upgraded = trigger.split("→")[1]
+            unit.remove_status(sub)
+            while unit.has_status(sub):
+                unit.remove_status(sub)
+            unit.add_status(upgraded)
+        return
+
+    if r.upgraded:
+        unit.remove_status(r.upgraded_from)
+        while unit.has_status(r.upgraded_from):
+            unit.remove_status(r.upgraded_from)
+        unit.add_status(r.upgraded_to)
+        return
+
+    if r.stacked:
+        existing = unit.get_status(r.status_name)
+        if existing:
+            existing["stacks"] = r.stacks_after
+        return
+
+    if r.simple_applied:
+        unit.add_status(r.status_name, r.stacks_after)
+        return
+
+    # already_exists → no mutation needed
+
+
+def _format_status_result(unit: Unit, r: StatusReport) -> str:
+    name = unit.name
+    sn = r.status_name
+
+    if r.blocked_by_immune:
+        return f"{name} 的「免疫」阻挡了「{sn}」"
+    if r.blocked_by_resist:
+        return f"{name} 消耗一次「抵抗」无效了「{sn}」（剩余{r.resist_remaining}次）"
+    if r.is_mark:
+        lines = [f"{name} 获得了「标记」（同时视为停顿/震颤/寒冷/困倦）"]
+        for t in r.mark_sub_triggers:
+            lines.append(f"  「标记」触发：{t}")
+        return "\n".join(lines)
+    if r.upgraded:
+        return f"{name} 的「{r.upgraded_from}」升级为「{r.upgraded_to}」！"
+    if r.stacked:
+        return f"{name} 的「{sn}」层数 +{r.stacks_delta} → 当前 {r.stacks_after} 层"
+    if r.simple_applied:
+        stacks_text = str(r.stacks_after) if r.stacks_after > 0 else ""
+        return f"{name} 获得了「{sn}{stacks_text}」"
+    if r.already_exists:
+        upgraded_hint = STATUS_UPGRADE.get(sn, "")
+        if upgraded_hint:
+            return f"{name} 已有「{upgraded_hint}」，「{sn}」不叠加"
+        return f"{name} 已有「{sn}」，不重复添加"
+    return ""
 
 
 def _apply_mark(unit: Unit) -> str:

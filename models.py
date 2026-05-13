@@ -292,3 +292,13 @@ class CombatState:
         if self.turn_order and 0 <= self.now_index < len(self.turn_order):
             return self.turn_order[self.now_index]
         return None
+
+
+# ============================================================
+# 主题颜色（集中管理硬编码颜色）
+# ============================================================
+
+THEME = {
+    "current_actor_bg": "#d4e6f1",   # 当前行动单位高亮
+    "monster_row_bg": "#f5d4d4",     # 怪物行背景色
+}

@@ -5,7 +5,7 @@
 ## 快速启动
 
 ```bash
-pip install tkinter  # 通常 Python 自带，无需安装
+pip install PySide6
 python main.py
 ```
 

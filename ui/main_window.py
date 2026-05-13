@@ -14,7 +14,10 @@ from persistence import save_data, load_data
 from ui.unit_panel import UnitPanel
 from ui.combat_panel import CombatPanel
 
-SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
+COMBAT_LOG_PATH = os.path.join(BASE_DIR, "combat_log.txt")
+GM_LOG_PATH = os.path.join(BASE_DIR, "gm_log.txt")
 
 
 def _load_settings() -> dict:
@@ -143,6 +146,12 @@ class MainWindow(QMainWindow):
         watermark_action.triggered.connect(self._set_watermark)
         settings_menu.addAction(watermark_action)
 
+        settings_menu.addSeparator()
+
+        export_log_action = QAction("导出战斗日志...", self)
+        export_log_action.triggered.connect(self._export_log)
+        settings_menu.addAction(export_log_action)
+
     # ============================================================
     # UI
     # ============================================================
@@ -176,23 +185,34 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter, 1)
 
-        log_group = QGroupBox("战斗日志")
-        log_layout = QVBoxLayout(log_group)
-        log_layout.setContentsMargins(4, 4, 4, 4)
+        self.combat_panel.set_log_callback(self.append_log)
+
+        log_splitter = QSplitter(Qt.Horizontal)
+
+        combat_log_group = QGroupBox("战斗日志")
+        combat_log_layout = QVBoxLayout(combat_log_group)
+        combat_log_layout.setContentsMargins(4, 4, 4, 4)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(110)
-        log_layout.addWidget(self.log_text)
-        layout.addWidget(log_group, 0)
+        self.log_text.setMaximumHeight(120)
+        combat_log_layout.addWidget(self.log_text)
+        log_splitter.addWidget(combat_log_group)
+
+        gm_log_group = QGroupBox("GM日志")
+        gm_log_layout = QVBoxLayout(gm_log_group)
+        gm_log_layout.setContentsMargins(4, 4, 4, 4)
+        self.gm_log_text = QTextEdit()
+        self.gm_log_text.setMaximumHeight(120)
+        gm_log_layout.addWidget(self.gm_log_text)
+        log_splitter.addWidget(gm_log_group)
+
+        layout.addWidget(log_splitter, 0)
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_label = QLabel("就绪")
         self.status_bar.addWidget(self.status_label)
 
-        import sys
-        self._old_stdout = sys.stdout
-        sys.stdout = self._LogRedirector(self)
 
     def _on_central_resize(self, event):
         """central 大小变化时，同步背景层和内容层"""
@@ -241,6 +261,7 @@ class MainWindow(QMainWindow):
     def _load_data(self):
         self.units = load_data()
         self.unit_panel.load_units(self.units)
+        self._load_logs()
         self._update_status()
 
     def _on_units_changed(self, units: list[Unit]):
@@ -259,8 +280,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._save()
-        import sys
-        sys.stdout = self._old_stdout
+        self._save_logs()
         super().closeEvent(event)
 
     # ============================================================
@@ -273,14 +293,29 @@ class MainWindow(QMainWindow):
     def _append_log(self, message: str):
         self.log_text.append(message)
 
-    class _LogRedirector:
-        def __init__(self, window: "MainWindow"):
-            self.window = window
+    def _save_logs(self):
+        with open(COMBAT_LOG_PATH, "w", encoding="utf-8") as f:
+            f.write(self.log_text.toPlainText())
+        with open(GM_LOG_PATH, "w", encoding="utf-8") as f:
+            f.write(self.gm_log_text.toPlainText())
 
-        def write(self, message: str):
-            msg = message.strip()
-            if msg:
-                self.window.append_log(msg)
+    def _load_logs(self):
+        for path, widget in [(COMBAT_LOG_PATH, self.log_text), (GM_LOG_PATH, self.gm_log_text)]:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    widget.setPlainText(f.read())
+            except FileNotFoundError:
+                pass
 
-        def flush(self):
-            pass
+    def _export_log(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出战斗日志", "combat_log.txt", "文本文件 (*.txt);;所有文件 (*.*)"
+        )
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("=== 战斗日志 ===\n")
+            f.write(self.log_text.toPlainText())
+            f.write("\n\n=== GM日志 ===\n")
+            f.write(self.gm_log_text.toPlainText())
+        self.status_label.setText(f"日志已导出到 {path}")

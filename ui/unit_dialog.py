@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QLabel, QMessageBox, QFrame,
 )
 from PySide6.QtCore import Qt
-from models import Unit, POSITIVE_BUFFS, NEGATIVE_BUFFS
+from models import Unit, POSITIVE_BUFFS, NEGATIVE_BUFFS, ELITE_TENACITY
 
 
 class UnitDialog(QDialog):
@@ -17,6 +17,7 @@ class UnitDialog(QDialog):
         self.unit = unit
         self.result: Unit | None = None
         self.is_edit = True
+        self._loading = False
 
         title = "编辑单位" if unit.name else "添加单位"
         self.setWindowTitle(title)
@@ -88,6 +89,7 @@ class UnitDialog(QDialog):
         form4 = QFormLayout()
         self.elite_combo = QComboBox()
         self.elite_combo.addItems(["0", "1", "2"])
+        self.elite_combo.currentTextChanged.connect(self._on_elite_changed)
         form4.addRow("精英化阶段", self.elite_combo)
 
         self.tenacity_cur_spin = QSpinBox()
@@ -148,6 +150,7 @@ class UnitDialog(QDialog):
         self.buff_container.setVisible(checked)
 
     def _load_unit_data(self):
+        self._loading = True
         u = self.unit
         self.name_edit.setText(u.name)
         self.type_combo.setCurrentText(u.unit_type)
@@ -167,6 +170,17 @@ class UnitDialog(QDialog):
             self.positive_vars[s].setChecked(u.has_status(s))
         for s in NEGATIVE_BUFFS:
             self.negative_vars[s].setChecked(u.has_status(s))
+        self._loading = False
+
+    def _on_elite_changed(self, text):
+        """精英阶段变化时，若韧性上限为旧标准值则自动同步到新标准值"""
+        if self._loading:
+            return
+        elite = int(text)
+        if elite in ELITE_TENACITY and self.tenacity_max_spin.value() in ELITE_TENACITY.values():
+            standard = ELITE_TENACITY[elite]
+            self.tenacity_max_spin.setValue(standard)
+            self.tenacity_cur_spin.setValue(standard)
 
     def _on_save(self):
         name = self.name_edit.text().strip()

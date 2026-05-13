@@ -3,12 +3,12 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTreeWidget,
     QTreeWidgetItem, QTextEdit, QRadioButton, QButtonGroup,
-    QFileDialog, QMessageBox, QDialog, QLabel, QLineEdit, QTextEdit as QTextEdit2,
+    QFileDialog, QMessageBox, QDialog, QLabel, QLineEdit, QTextEdit,
     QDialogButtonBox,
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QColor, QBrush
-from models import Unit
+from models import Unit, THEME
 
 
 class QuickImportDialog(QDialog):
@@ -27,7 +27,7 @@ class QuickImportDialog(QDialog):
         layout.addWidget(self.name_edit)
 
         layout.addWidget(QLabel("粘贴骰娘导出文本:"))
-        self.text_edit = QTextEdit2()
+        self.text_edit = QTextEdit()
         layout.addWidget(self.text_edit)
 
         buttons = QDialogButtonBox()
@@ -147,12 +147,12 @@ class UnitPanel(QWidget):
             ])
             item.unit_id = u.unit_id
             if u.unit_type == "player":
-                item.setBackground(0, QBrush(QColor("#d4e6f1")))
+                item.setBackground(0, QBrush(QColor(THEME["current_actor_bg"])))
             else:
-                item.setBackground(0, QBrush(QColor("#f5d4d4")))
+                item.setBackground(0, QBrush(QColor(THEME["monster_row_bg"])))
             self.tree.addTopLevelItem(item)
 
-    def _get_selected_unit(self) -> Unit | None:
+    def get_selected_unit(self) -> Unit | None:
         item = self.tree.currentItem()
         if not item:
             return None
@@ -162,7 +162,7 @@ class UnitPanel(QWidget):
         return None
 
     def _on_select(self):
-        self._show_detail(self._get_selected_unit())
+        self._show_detail(self.get_selected_unit())
 
     # ============================================================
     # 详情
@@ -209,7 +209,7 @@ class UnitPanel(QWidget):
             self._notify_change()
 
     def _edit_unit(self):
-        unit = self._get_selected_unit()
+        unit = self.get_selected_unit()
         if not unit:
             QMessageBox.information(self, "提示", "请先选择一个单位")
             return
@@ -221,7 +221,7 @@ class UnitPanel(QWidget):
             self._notify_change()
 
     def _delete_unit(self):
-        unit = self._get_selected_unit()
+        unit = self.get_selected_unit()
         if not unit:
             QMessageBox.information(self, "提示", "请先选择一个单位")
             return
