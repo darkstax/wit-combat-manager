@@ -592,25 +592,6 @@ def _format_status_result(unit: Unit, r: StatusReport) -> str:
     return ""
 
 
-def _apply_mark(unit: Unit) -> str:
-    messages = []
-    unit.add_status("标记")
-    messages.append(f"{unit.name} 获得了「标记」（同时视为停顿/震颤/寒冷/困倦）")
-
-    for sub in ["停顿", "寒冷", "困倦"]:
-        if sub in STATUS_UPGRADE:
-            upgraded = STATUS_UPGRADE[sub]
-            if unit.has_status(upgraded):
-                continue
-            if unit.has_status(sub):
-                unit.remove_status(sub)
-                while unit.has_status(sub):
-                    unit.remove_status(sub)
-                unit.add_status(upgraded)
-                messages.append(f"  「标记」触发：{sub} → {upgraded}")
-
-    return "\n".join(messages)
-
 
 def process_end_of_turn(unit: Unit) -> list[str]:
     removed = []
@@ -728,6 +709,10 @@ def next_actor(state: CombatState, all_units: list[Unit]) -> tuple[CombatState, 
         messages: list[str] = []
         valid_ids = {u.unit_id for u in all_units}
         state.turn_order = [uid for uid in state.turn_order if uid in valid_ids]
+
+        if not state.turn_order:
+            return state, ["[提示] 行动顺序为空，请先添加单位并开始战斗。"]
+
         state.now_index += 1
 
         if state.now_index >= len(state.turn_order):

@@ -3,6 +3,7 @@
 import json
 import os
 from dataclasses import asdict
+from datetime import datetime
 from typing import Optional
 from models import Unit, CombatState
 
@@ -30,7 +31,7 @@ def load_data(filepath: Optional[str] = None) -> list[Unit]:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        bak_path = path + ".bak"
+        bak_path = f"{path}.{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
         os.replace(path, bak_path)
         return []
     return [Unit.from_dict(d) for d in data]
