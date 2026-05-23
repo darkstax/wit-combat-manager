@@ -161,7 +161,7 @@ def _calc_damage(unit: Unit, amount: int, dmg_type: str, is_attack: bool) -> Dam
     return report
 
 
-def _calc_true_damage(unit: Unit, amount: int) -> DamageReport:
+def _calc_true_damage(unit: Unit, amount: int, is_attack: bool = False) -> DamageReport:
     """纯计算：真实伤害，不修改 unit"""
     report = DamageReport(raw_amount=amount, resist_reduced=0)
     final_dmg = amount
@@ -183,6 +183,9 @@ def _calc_true_damage(unit: Unit, amount: int) -> DamageReport:
     report.hp_after = max(0, unit.current_hp - final_dmg)
     report.is_dying = (report.hp_before > 0 and report.hp_after == 0)
 
+    if is_attack and unit.has_status("睡眠"):
+        report.sleep_broken = True
+
     return report
 
 
@@ -194,9 +197,14 @@ def apply_damage(unit: Unit, amount: int, dmg_type: str = "物理",
             return f"{unit.name} 未受到伤害"
 
         if dmg_type == "真实":
-            report = _calc_true_damage(unit, amount)
+            report = _calc_true_damage(unit, amount, is_attack)
             _apply_true_damage_mutations(unit, report)
-            return _format_true_damage_result(unit, report)
+            result = _format_true_damage_result(unit, report)
+            if is_attack and attacker is not None:
+                end_attack_msg = process_end_attack(attacker)
+                if end_attack_msg:
+                    result += f"\n{end_attack_msg}"
+            return result
         else:
             report = _calc_damage(unit, amount, dmg_type, is_attack)
             _apply_damage_mutations(unit, report)
@@ -266,18 +274,22 @@ def _apply_true_damage_mutations(unit: Unit, r: DamageReport):
         unit.temp_hp = r.temp_hp_after
         barrier = unit.get_status("屏障")
         if barrier:
-            # WIT规则：屏障每层吸收一次攻击（不论伤害量），而非按伤害点数递减
             barrier["stacks"] -= 1
             if r.barrier_depleted:
                 unit.remove_status("屏障")
                 unit.temp_hp = 0
     unit.current_hp = r.hp_after
 
+    if r.sleep_broken:
+        unit.remove_status("睡眠")
+
 
 def _format_true_damage_result(unit: Unit, r: DamageReport) -> str:
     msg = f"{unit.name} 受到 {r.final_damage} 点真实伤害（HP: {r.hp_after}/{unit.max_hp}）"
     if r.is_dying:
         msg += f"\n!!! {unit.name} HP归零，陷入濒死状态 !!!"
+    if r.sleep_broken:
+        msg += f"\n{unit.name} 的「睡眠」因受到攻击而解除"
     return msg
 
 

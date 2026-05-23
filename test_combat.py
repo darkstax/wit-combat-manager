@@ -132,6 +132,25 @@ class TestDamageCalc:
         assert not attacker.has_status("精准")
         assert "睡眠" not in target.status_names()
 
+    def test_true_damage_attack_breaks_sleep(self):
+        """真伤攻击打断睡眠"""
+        u = _u()
+        u.add_status("睡眠")
+        r = _calc_true_damage(u, 5, is_attack=True)
+        assert r.sleep_broken
+
+    def test_true_damage_attack_clears_attacker_buffs(self):
+        """真伤攻击清除攻击方增益"""
+        attacker = _u(name="Attacker")
+        attacker.add_status("伤害强化", 3)
+        attacker.add_status("精准")
+        target = _u(name="Target")
+        target.add_status("睡眠")
+        msg = apply_damage(target, 5, "真实", is_attack=True, attacker=attacker)
+        assert not attacker.has_status("伤害强化")
+        assert not attacker.has_status("精准")
+        assert "睡眠" not in target.status_names()
+
 
 # ============================================================
 # 治疗计算
