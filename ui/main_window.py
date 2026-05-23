@@ -279,8 +279,14 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"玩家: {p_count} | 怪物: {m_count} | 共 {len(self.units)} 单位")
 
     def closeEvent(self, event):
-        self._save()
-        self._save_logs()
+        try:
+            self._save()
+        except Exception:
+            pass
+        try:
+            self._save_logs()
+        except Exception:
+            pass
         super().closeEvent(event)
 
     # ============================================================
@@ -304,7 +310,7 @@ class MainWindow(QMainWindow):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     widget.setPlainText(f.read())
-            except FileNotFoundError:
+            except (FileNotFoundError, PermissionError, OSError):
                 pass
 
     def _export_log(self):

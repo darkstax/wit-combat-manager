@@ -187,8 +187,9 @@ class UnitDialog(QDialog):
         if not name:
             QMessageBox.warning(self, "验证失败", "请输入单位名称")
             return
-        if self.current_hp_spin.value() < 0 or self.max_hp_spin.value() <= 0:
-            QMessageBox.warning(self, "验证失败", "血量设置不合法")
+        if (self.current_hp_spin.value() < 0 or self.max_hp_spin.value() <= 0
+                or self.current_hp_spin.value() > self.max_hp_spin.value()):
+            QMessageBox.warning(self, "验证失败", "血量设置不合法（当前HP不能超过最大HP）")
             return
 
         self.unit.name = name

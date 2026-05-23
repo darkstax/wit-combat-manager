@@ -11,3 +11,5 @@ build/
 dist/
 *.spec
 release/
+combat_log.txt
+gm_log.txt

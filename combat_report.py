@@ -20,7 +20,6 @@ class DamageReport:
     hp_after: int = 0
     is_dying: bool = False
     sleep_broken: bool = False
-    attack_buffs_cleared: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -67,3 +66,4 @@ class ElementalReport:
     burst_triggered: bool = False
     burst_type: str = ""
     burst_statuses: list[str] = field(default_factory=list)
+    overflow: int = 0  # 超出韧性的损伤量，应在 mutation 层 ×3 转真伤

@@ -16,6 +16,7 @@ from combat import (
     apply_damage, apply_healing, apply_elemental_damage,
     apply_status, clear_all_statuses, next_actor, advance_turn,
 )
+from persistence import save_combat_state, load_combat_state, delete_combat_state
 
 
 class CombatPanel(QWidget):
@@ -204,6 +205,19 @@ class CombatPanel(QWidget):
             QMessageBox.information(self, "提示", "请先添加至少一个单位")
             return
 
+        saved = load_combat_state()
+        if saved and saved.active:
+            reply = QMessageBox.question(
+                self, "恢复战斗",
+                f"检测到第 {saved.turn} 回合的未完成战斗，是否继续？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                self.combat_state = saved
+                self._update_ui_state()
+                self._refresh_order_list()
+                return
+
         mode = self.init_mode_combo.currentData()
 
         if mode == "team":
@@ -236,6 +250,7 @@ class CombatPanel(QWidget):
 
         self._update_ui_state()
         self._refresh_order_list()
+        save_combat_state(self.combat_state)
 
     def _next_action(self):
         if not self.combat_state or not self.combat_state.active:
@@ -246,6 +261,7 @@ class CombatPanel(QWidget):
             self._log(msg)
         self._update_ui_state()
         self._refresh_order_list()
+        save_combat_state(self.combat_state)
 
     def _end_turn(self):
         if not self.combat_state:
@@ -256,6 +272,7 @@ class CombatPanel(QWidget):
             self._log(msg)
         self._update_ui_state()
         self._refresh_order_list()
+        save_combat_state(self.combat_state)
 
     def _end_combat(self):
         if not self.combat_state:
@@ -268,6 +285,7 @@ class CombatPanel(QWidget):
         if reply == QMessageBox.Yes:
             self.combat_state.active = False
             self.combat_state = None
+            delete_combat_state()
             self.turn_label.setText("Turn: --")
             self.now_label.setText("Now: --")
             self.team_score_label.setText("")
@@ -282,7 +300,7 @@ class CombatPanel(QWidget):
     # ============================================================
 
     def _apply_damage(self):
-        target = self._get_target()
+        target = self.unit_provider.get_selected_unit() if self.unit_provider else None
         if not target:
             QMessageBox.information(self, "提示", "请先在左侧选择一个目标单位")
             return
@@ -290,10 +308,19 @@ class CombatPanel(QWidget):
         dmg_type = self.dmg_type_combo.currentText()
         is_attack = self.is_attack_cb.isChecked()
 
+        attacker = None
+        if is_attack and self.combat_state and self.combat_state.active:
+            cur_id = self.combat_state.current_unit_id
+            if cur_id:
+                attacker = self.unit_provider.find_unit(cur_id)
+            if attacker is None:
+                QMessageBox.information(self, "提示", "勾选了"攻击"但无法确定当前回合方，请先开始战斗")
+                return
+
         if dmg_type == "治疗":
             msg = apply_healing(target, amount)
         else:
-            msg = apply_damage(target, amount, dmg_type, is_attack)
+            msg = apply_damage(target, amount, dmg_type, is_attack, attacker=attacker)
 
         self._log(msg)
         self.unit_provider._refresh_tree()

@@ -68,4 +68,82 @@ trpg_manager/
 
 ## 当前任务
 
-待定 — 准备开发新功能
+### 任务 3：元素爆发溢出损伤未转换 🔴
+**规则依据**：`工作资料/元素损伤.txt` — "若元素爆发期间的单位受到了（也包括令元素爆发时超出的）元素损伤，则会改为受到损伤数额×3的真实伤害。"
+
+**当前行为**：`Unit.reduce_tenacity()` 返回溢出值，但 `_apply_elemental_mutations` 丢弃了它。韧性 3、受 10 点损伤时，3 点扣韧性触发爆发，7 点溢出静默消失。
+
+**目标行为**：溢出部分 `overflow * 3` 转为真实伤害，调用 `_apply_true_damage`。
+
+**涉及文件**：`combat.py`（`_apply_elemental_mutations` 约 370 行）
+
+---
+
+## 代码审计报告 (2026-05-19)
+
+> 基于全量代码审查 + `工作资料/元素损伤.txt` 和 `buff.txt` 规则对照。
+> 注：`true_dmg_mult`（2/3/2/2/2/1）是触发爆发瞬间的 N×辅助骰初始伤害，程序不跟踪攻击者辅助骰故交由 GM 手动输入 —— 设计正确，非 bug。
+
+### 🔴 严重（2项）— ✅ 已全部修复 (2026-05-20)
+
+#### 1. ✅ 元素爆发溢出损伤未转为真实伤害
+- **修复**：`ElementalReport` 新增 `overflow` 字段；`_calc_elemental` 记录溢出值；`_apply_elemental_mutations` 爆发触发后 `overflow × 3` 转真伤
+
+#### 2. ✅ 迅捷+迟缓共存 → `_apply_speed_reorder` 崩溃
+- **修复**：去重 — 重叠 uid 从 swifts/slows 双列表移除（抵消，原位不动），状态照常清除
+- **附加**：6 个公开战斗 API (`apply_damage/healing/elemental_damage/status` + `advance_turn`/`next_actor`) 加 try-catch 安全网，异常返回 `[错误] ...` 消息指引主持手动干预
+
+### 🟡 中等（5项）— ✅ 已全部修复 (2026-05-20)
+
+#### 3. ✅ UnitDialog 允许 current_hp > max_hp
+- **修复**：`_on_save` 追加 `current_hp > max_hp` 校验
+
+#### 4. ✅ 战斗中删除单位：幽灵 ID 残留在 turn_order
+- **修复**：`next_actor` 开头用 `valid_ids` 集合过滤掉已不存在的 unit_id
+
+#### 5. ✅ 战斗状态不持久化
+- **修复**：`persistence.py` 新增 `save_combat_state` / `load_combat_state` / `delete_combat_state`；`combat_panel.py` 每次状态变更自动保存，`_end_combat` 时删除，`_start_combat` 时检测未完成战斗并提示恢复
+
+#### 6. ✅ closeEvent 保存失败阻塞窗口关闭
+- **修复**：`_save()` 和 `_save_logs()` 分别包 try-catch
+
+#### 7. ✅ _load_logs 仅捕获 FileNotFoundError
+- **修复**：except 扩展为 `(FileNotFoundError, PermissionError, OSError)`
+
+### 🟢 轻微（6项）
+
+#### 8. 死代码：_apply_mark() 函数（76行）
+- **文件**：`combat.py` 约 570-595 行
+- **说明**：`apply_status` 通过 `StatusReport.is_mark` 分支在 `_apply_status_mutations` 中内联处理，该函数从未调用，可安全删除
+
+#### 9. 团队先攻平局永远玩家先动
+- **文件**：`combat.py` `team_initiative()`
+- **现状**：`if player_score >= monster_score`（>= 偏袒玩家），无随机因素
+
+#### 10. .bak 备份被反复覆盖
+- **文件**：`persistence.py` `load_data()`
+- **现状**：连续两次 JSON 损坏时，第二次 `os.replace` 覆盖第一次的 `.bak`
+
+#### 11. turn_order 为空时无限空转
+- **文件**：`combat.py` `next_actor()`
+- **现状**：所有单位删除后 turn_order=[]，每次点"下一行动" Turn+1 但无事发生
+
+#### 12. 真伤模式"攻击"复选框无效果
+- **文件**：`combat.py` `apply_damage()` / `ui/combat_panel.py`
+- **现状**：真伤路径不走 `is_attack` 参数，复选框可勾选但无效 → 建议真伤时禁用
+
+#### 13. 元素韧性溢出损伤静默丢弃
+- **文件**：`combat.py` `_apply_elemental_mutations()`
+- **说明**：与 #1 同一位置，溢出值被丢弃（#1 已作为严重问题单独追踪）
+
+---
+
+### 📊 审计评分
+
+| 维度 | 评分 | 说明 |
+|------|------|------|
+| 规则还原度 | ⭐⭐⭐⭐ | 除溢出损伤外，与 `元素损伤.txt` / `buff.txt` 高度一致 |
+| 逻辑正确性 | ⭐⭐⭐⭐ | 2 严重 + 5 中等均已修复 |
+| 代码架构 | ⭐⭐⭐⭐⭐ | 纯计算分离、Report dataclass、信号驱动日志、DI 注入 |
+| 测试覆盖 | ⭐⭐⭐⭐ | 59 用例覆盖核心路径 |
+| 文档 | ⭐⭐⭐⭐ | CLAUDE.md 详尽，规则对照清晰 |

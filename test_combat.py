@@ -4,6 +4,7 @@ from models import Unit, CombatState
 from combat import (
     _calc_damage, _calc_true_damage,
     _calc_healing, _calc_status, _calc_elemental,
+    apply_damage,
     team_initiative, traditional_initiative, manual_initiative,
     next_actor, advance_turn, _apply_speed_reorder,
     process_end_of_turn, process_end_attack,
@@ -119,13 +120,17 @@ class TestDamageCalc:
         r = _calc_damage(u, 3, "物理", False)
         assert not r.sleep_broken
 
-    def test_attack_clears_attack_buffs(self):
-        u = _u()
-        u.add_status("伤害强化", 3)
-        u.add_status("精准")
-        r = _calc_damage(u, 3, "物理", True)
-        assert "伤害强化" in r.attack_buffs_cleared
-        assert "精准" in r.attack_buffs_cleared
+    def test_attack_clears_attacker_buffs_and_breaks_target_sleep(self):
+        """攻击方增益在攻击后清除，目标睡眠被打断"""
+        attacker = _u(name="Attacker")
+        attacker.add_status("伤害强化", 3)
+        attacker.add_status("精准")
+        target = _u(name="Target")
+        target.add_status("睡眠")
+        msg = apply_damage(target, 3, "物理", is_attack=True, attacker=attacker)
+        assert not attacker.has_status("伤害强化")
+        assert not attacker.has_status("精准")
+        assert "睡眠" not in target.status_names()
 
 
 # ============================================================

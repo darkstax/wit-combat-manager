@@ -158,9 +158,6 @@ def _calc_damage(unit: Unit, amount: int, dmg_type: str, is_attack: bool) -> Dam
     if is_attack and unit.has_status("睡眠"):
         report.sleep_broken = True
 
-    if is_attack:
-        report.attack_buffs_cleared = [s for s in END_OF_ATTACK_BUFFS if unit.has_status(s)]
-
     return report
 
 
@@ -190,22 +187,30 @@ def _calc_true_damage(unit: Unit, amount: int) -> DamageReport:
 
 
 def apply_damage(unit: Unit, amount: int, dmg_type: str = "物理",
-                 is_attack: bool = True) -> str:
+                 is_attack: bool = True, attacker: Unit | None = None) -> str:
     """造成伤害。dmg_type: "物理" | "法术" | "真实"。"""
-    if amount <= 0:
-        return f"{unit.name} 未受到伤害"
+    try:
+        if amount <= 0:
+            return f"{unit.name} 未受到伤害"
 
-    if dmg_type == "真实":
-        report = _calc_true_damage(unit, amount)
-        _apply_true_damage_mutations(unit, report)
-        return _format_true_damage_result(unit, report)
-    else:
-        report = _calc_damage(unit, amount, dmg_type, is_attack)
-        _apply_damage_mutations(unit, report, is_attack)
-        return _format_damage_result(unit, report, dmg_type)
+        if dmg_type == "真实":
+            report = _calc_true_damage(unit, amount)
+            _apply_true_damage_mutations(unit, report)
+            return _format_true_damage_result(unit, report)
+        else:
+            report = _calc_damage(unit, amount, dmg_type, is_attack)
+            _apply_damage_mutations(unit, report)
+            result = _format_damage_result(unit, report, dmg_type)
+            if is_attack and attacker is not None:
+                end_attack_msg = process_end_attack(attacker)
+                if end_attack_msg:
+                    result += f"\n{end_attack_msg}"
+            return result
+    except Exception as e:
+        return f"[错误] 造成伤害时内部错误: {e}，请主持手动处理目标单位的HP和状态。"
 
 
-def _apply_damage_mutations(unit: Unit, r: DamageReport, is_attack: bool):
+def _apply_damage_mutations(unit: Unit, r: DamageReport):
     """根据 DamageReport 对 unit 执行状态变更"""
     if r.blocked_by_shield:
         shield = unit.get_status("护盾")
@@ -219,6 +224,7 @@ def _apply_damage_mutations(unit: Unit, r: DamageReport, is_attack: bool):
         unit.temp_hp = r.temp_hp_after
         barrier = unit.get_status("屏障")
         if barrier:
+            # WIT规则：屏障每层吸收一次攻击（不论伤害量），而非按伤害点数递减
             barrier["stacks"] -= 1
             if r.barrier_depleted:
                 unit.remove_status("屏障")
@@ -229,9 +235,6 @@ def _apply_damage_mutations(unit: Unit, r: DamageReport, is_attack: bool):
     if r.sleep_broken:
         unit.remove_status("睡眠")
 
-    if is_attack:
-        for name in r.attack_buffs_cleared:
-            unit.remove_status(name)
 
 
 def _format_damage_result(unit: Unit, r: DamageReport, dmg_type: str) -> str:
@@ -247,8 +250,6 @@ def _format_damage_result(unit: Unit, r: DamageReport, dmg_type: str) -> str:
         result += f"\n!!! {unit.name} HP归零，陷入濒死状态 !!!"
     if r.sleep_broken:
         result += f"\n{unit.name} 的「睡眠」因受到攻击而解除"
-    if r.attack_buffs_cleared:
-        result += f"\n{unit.name} 攻击后清除了: {'、'.join(r.attack_buffs_cleared)}"
 
     return result
 
@@ -265,6 +266,7 @@ def _apply_true_damage_mutations(unit: Unit, r: DamageReport):
         unit.temp_hp = r.temp_hp_after
         barrier = unit.get_status("屏障")
         if barrier:
+            # WIT规则：屏障每层吸收一次攻击（不论伤害量），而非按伤害点数递减
             barrier["stacks"] -= 1
             if r.barrier_depleted:
                 unit.remove_status("屏障")
@@ -300,9 +302,12 @@ def _calc_healing(unit: Unit, amount: int) -> HealingReport:
 
 def apply_healing(unit: Unit, amount: int) -> str:
     """治疗：受禁疗影响则失效，亲和增加d4"""
-    report = _calc_healing(unit, amount)
-    _apply_healing_mutations(unit, report)
-    return _format_healing_result(unit, report)
+    try:
+        report = _calc_healing(unit, amount)
+        _apply_healing_mutations(unit, report)
+        return _format_healing_result(unit, report)
+    except Exception as e:
+        return f"[错误] 施加治疗时内部错误: {e}，请主持手动处理目标单位的HP。"
 
 
 def _apply_healing_mutations(unit: Unit, r: HealingReport):
@@ -346,6 +351,7 @@ def _calc_elemental(unit: Unit, amount: int, elem_type: str) -> ElementalReport:
     if remaining > 0:
         report.tenacity_before = unit.elemental_tenacity_current
         reduced = min(remaining, unit.elemental_tenacity_current)
+        report.overflow = max(0, remaining - unit.elemental_tenacity_current)
         report.tenacity_reduced = reduced
         report.tenacity_after = unit.elemental_tenacity_current - reduced
         if report.tenacity_after <= 0 and elem_type in ELEMENTAL_BURST_EFFECTS:
@@ -361,8 +367,11 @@ def _calc_elemental(unit: Unit, amount: int, elem_type: str) -> ElementalReport:
 
 def apply_elemental_damage(unit: Unit, amount: int, elem_type: str) -> str:
     """施加元素损伤"""
-    report = _calc_elemental(unit, amount, elem_type)
-    return _apply_elemental_mutations(unit, report, amount, elem_type)
+    try:
+        report = _calc_elemental(unit, amount, elem_type)
+        return _apply_elemental_mutations(unit, report, amount, elem_type)
+    except Exception as e:
+        return f"[错误] 施加元素损伤时内部错误: {e}，请主持手动处理目标单位的元素韧性和爆发状态。"
 
 
 def _apply_elemental_mutations(unit: Unit, r: ElementalReport, amount: int, elem_type: str) -> str:
@@ -375,6 +384,7 @@ def _apply_elemental_mutations(unit: Unit, r: ElementalReport, amount: int, elem
     if r.barrier_absorbed > 0:
         elem_barrier = unit.get_status("元素屏障")
         if elem_barrier:
+            # WIT规则：元素屏障每层吸收1点元素损伤（与物理屏障"每层吸收一次攻击"语义不同，此为官方规则）
             elem_barrier["stacks"] -= r.barrier_absorbed
         result = f"{unit.name} 的元素屏障吸收了 {r.barrier_absorbed} 点{elem_type}"
         if r.barrier_depleted:
@@ -390,6 +400,11 @@ def _apply_elemental_mutations(unit: Unit, r: ElementalReport, amount: int, elem
         if r.burst_triggered:
             burst_msgs = trigger_elemental_burst(unit, elem_type)
             result += "\n" + burst_msgs
+
+            if r.overflow > 0:
+                true_dmg = r.overflow * 3
+                true_msg = _apply_true_damage(unit, true_dmg)
+                result += f"\n[溢出] 超出韧性损伤 {r.overflow} 点转为 {true_dmg} 点真实伤害\n{true_msg}"
 
     return result.strip()
 
@@ -500,9 +515,12 @@ def _calc_status(unit: Unit, status_name: str, stacks: int = 0) -> StatusReport:
 
 def apply_status(unit: Unit, status_name: str, stacks: int = 0) -> str:
     """施加状态效果。带X的状态会叠加层数。"""
-    report = _calc_status(unit, status_name, stacks)
-    _apply_status_mutations(unit, report)
-    return _format_status_result(unit, report)
+    try:
+        report = _calc_status(unit, status_name, stacks)
+        _apply_status_mutations(unit, report)
+        return _format_status_result(unit, report)
+    except Exception as e:
+        return f"[错误] 施加状态「{status_name}」时内部错误: {e}，请主持手动处理目标单位的状态。"
 
 
 def _apply_status_mutations(unit: Unit, r: StatusReport):
@@ -661,17 +679,20 @@ def process_round_start(units: list[Unit]) -> list[str]:
 # ============================================================
 
 def advance_turn(state: CombatState, all_units: list[Unit]) -> tuple[CombatState, list[str]]:
-    state.turn += 1
-    state.now_index = 0
+    try:
+        state.turn += 1
+        state.now_index = 0
 
-    msgs = process_round_start(all_units)
-    msgs2 = end_turn_cleanup(all_units)
+        msgs = process_round_start(all_units)
+        msgs2 = end_turn_cleanup(all_units)
 
-    all_msgs = msgs + msgs2
-    all_msgs.append(f"--- 第 {state.turn} 回合开始 ---")
+        all_msgs = msgs + msgs2
+        all_msgs.append(f"--- 第 {state.turn} 回合开始 ---")
 
-    _apply_speed_reorder(state, all_units)
-    return state, all_msgs
+        _apply_speed_reorder(state, all_units)
+        return state, all_msgs
+    except Exception as e:
+        return state, [f"[错误] 回合推进时内部错误: {e}，请主持手动推进回合并调整行动顺序。"]
 
 
 def _apply_speed_reorder(state: CombatState, units: list[Unit]):
@@ -684,6 +705,14 @@ def _apply_speed_reorder(state: CombatState, units: list[Unit]):
     if not swifts and not slows:
         return
 
+    overlap = set(swifts) & set(slows)
+    if overlap:
+        swifts = [u for u in swifts if u not in overlap]
+        slows = [u for u in slows if u not in overlap]
+        for uid in overlap:
+            unit_map[uid].remove_status("迅捷")
+            unit_map[uid].remove_status("迟缓")
+
     for uid in swifts:
         state.turn_order.remove(uid)
         unit_map[uid].remove_status("迅捷")
@@ -695,10 +724,15 @@ def _apply_speed_reorder(state: CombatState, units: list[Unit]):
 
 
 def next_actor(state: CombatState, all_units: list[Unit]) -> tuple[CombatState, list[str]]:
-    messages: list[str] = []
-    state.now_index += 1
+    try:
+        messages: list[str] = []
+        valid_ids = {u.unit_id for u in all_units}
+        state.turn_order = [uid for uid in state.turn_order if uid in valid_ids]
+        state.now_index += 1
 
-    if state.now_index >= len(state.turn_order):
-        state, msgs = advance_turn(state, all_units)
-        messages.extend(msgs)
-    return state, messages
+        if state.now_index >= len(state.turn_order):
+            state, msgs = advance_turn(state, all_units)
+            messages.extend(msgs)
+        return state, messages
+    except Exception as e:
+        return state, [f"[错误] 切换行动时内部错误: {e}，请主持手动切换当前行动单位。"]
