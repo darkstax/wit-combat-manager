@@ -314,7 +314,7 @@ class CombatPanel(QWidget):
             if cur_id:
                 attacker = self.unit_provider.find_unit(cur_id)
             if attacker is None:
-                QMessageBox.information(self, "提示", "勾选了"攻击"但无法确定当前回合方，请先开始战斗")
+                QMessageBox.information(self, "提示", "勾选了「攻击」但无法确定当前回合方，请先开始战斗")
                 return
 
         if dmg_type == "治疗":

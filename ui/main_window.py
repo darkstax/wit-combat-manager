@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QDialog, QPushButton, QApplication,
 )
 from PySide6.QtCore import Qt, Signal, QObject
-from PySide6.QtGui import QAction, QPixmap, QPainter, QFont
+from PySide6.QtGui import QAction, QPixmap, QPainter, QFont, QColor, QPalette
 from models import Unit
 from persistence import save_data, load_data
 from ui.unit_panel import UnitPanel
@@ -92,7 +92,7 @@ class WatermarkDialog(QDialog):
         layout.addWidget(self.value_label)
         self.slider.valueChanged.connect(lambda v: self.value_label.setText(f"当前强度: {v / 100:.2f}"))
 
-        layout.addWidget(QLabel("（背景图仅在控件间隙可见）"))
+        layout.addWidget(QLabel("（背景图将透过半透明控件显示）"))
 
         btn_layout = QHBoxLayout()
         save_btn = QPushButton("保存")
@@ -213,6 +213,34 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("就绪")
         self.status_bar.addWidget(self.status_label)
 
+        self._enable_transparent_widgets()
+
+
+    def _enable_transparent_widgets(self):
+        """递归遍历 content 子控件，让文本/列表类控件背景半透明，使自定义背景图透出"""
+        # content 自身透明
+        self.content.setAttribute(Qt.WA_StyledBackground, False)
+
+        from PySide6.QtWidgets import QTextEdit, QListWidget, QTreeWidget, QGroupBox
+
+        def _apply(widget: QWidget):
+            if isinstance(widget, (QTextEdit, QListWidget, QTreeWidget)):
+                p = widget.palette()
+                p.setColor(QPalette.Base, QColor(255, 255, 255, 25))
+                widget.setPalette(p)
+                # viewport 也需要透明，否则滚动区域内部仍为白底
+                vp = widget.viewport()
+                if vp:
+                    vp.setAutoFillBackground(False)
+            elif isinstance(widget, QGroupBox):
+                p = widget.palette()
+                p.setColor(QPalette.Window, QColor(0, 0, 0, 0))
+                widget.setPalette(p)
+            for child in widget.children():
+                if isinstance(child, QWidget):
+                    _apply(child)
+
+        _apply(self.content)
 
     def _on_central_resize(self, event):
         """central 大小变化时，同步背景层和内容层"""
