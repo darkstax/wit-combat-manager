@@ -11,16 +11,25 @@ def _fix_dpi():
     if sys.platform != "win32":
         return
     try:
+        # Windows 10+: update scale immediately when the window crosses screens.
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
+    except (AttributeError, OSError):
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except Exception:
+        except (AttributeError, OSError):
             pass
 
 
 def main():
     _fix_dpi()
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

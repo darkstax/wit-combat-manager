@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.venv/
 data.json
 .vscode/
 .idea/
@@ -9,7 +10,11 @@ settings.json
 _eval_debug.log
 build/
 dist/
+build-single/
+dist-single/
 *.spec
+!WIT-Combat-Manager.spec
 release/
 combat_log.txt
 gm_log.txt
+*.bak

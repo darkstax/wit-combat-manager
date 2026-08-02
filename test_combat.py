@@ -4,10 +4,12 @@ from models import Unit, CombatState
 from combat import (
     _calc_damage, _calc_true_damage,
     _calc_healing, _calc_status, _calc_elemental,
-    apply_damage,
+    apply_damage, apply_healing, apply_status, apply_elemental_damage,
+    resolve_pending_elemental_burst,
     team_initiative, traditional_initiative, manual_initiative,
     next_actor, advance_turn, _apply_speed_reorder,
     process_end_of_turn, process_end_attack,
+    process_turn_start, process_round_start,
 )
 
 
@@ -75,9 +77,10 @@ class TestDamageCalc:
         assert r.barrier_depleted
 
     def test_damage_boost_added(self):
+        attacker = _u(name="Attacker")
+        attacker.add_status("伤害强化", 4)
         u = _u(current_hp=20, max_hp=20, physical_resist=0)
-        u.add_status("伤害强化", 4)
-        r = _calc_damage(u, 5, "物理", False)
+        r = _calc_damage(u, 5, "物理", True, attacker=attacker)
         assert r.dmg_boost_added == 4
         assert r.final_damage == 9
 
@@ -89,10 +92,11 @@ class TestDamageCalc:
         assert r.final_damage == 7
 
     def test_boost_and_vuln_stack(self):
+        attacker = _u(name="Attacker")
+        attacker.add_status("伤害强化", 3)
         u = _u(current_hp=20, max_hp=20, physical_resist=0)
-        u.add_status("伤害强化", 3)
         u.add_status("脆弱", 2)
-        r = _calc_damage(u, 5, "物理", False)
+        r = _calc_damage(u, 5, "物理", True, attacker=attacker)
         assert r.final_damage == 10  # 5 + 3 + 2
 
     def test_hp_zero_triggers_dying(self):
@@ -207,7 +211,7 @@ class TestStatusCalc:
         assert r.is_mark
         assert r.simple_applied
         assert "停顿→束缚" in r.mark_sub_triggers
-        assert "困倦→睡眠" in r.mark_sub_triggers
+        assert "困顿→睡眠" in r.mark_sub_triggers
 
     def test_mark_skips_already_upgraded(self):
         u = _u()
@@ -475,3 +479,195 @@ class TestStatusCleanup:
         u.add_status("眩晕")
         msg = process_end_attack(u)
         assert u.has_status("眩晕")
+
+
+class TestV12Regression:
+    def test_barrier_consumes_one_stack_per_damage_event(self):
+        target = _u(current_hp=10, max_hp=10, temp_hp=5)
+        target.add_status("屏障", 5)
+
+        apply_damage(target, 3, "真实", is_attack=False)
+
+        assert target.temp_hp == 2
+        assert target.get_status("屏障")["stacks"] == 4
+
+    def test_shield_only_blocks_attacks(self):
+        target = _u()
+        target.add_status("护盾", 1)
+        report = _calc_damage(target, 5, "物理", False)
+        assert not report.blocked_by_shield
+        assert report.final_damage == 5
+
+    def test_missed_attack_does_not_consume_target_shield_or_gain_damage_boost(self):
+        attacker = _u(name="Attacker")
+        attacker.add_status("伤害强化", 5)
+        target = _u(physical_resist=10)
+        target.add_status("护盾", 2)
+        report = _calc_damage(target, 5, "物理", True, attacker=attacker)
+        assert report.attack_missed
+        assert report.final_damage == 0
+        assert not report.blocked_by_shield
+        assert target.get_status("护盾")["stacks"] == 2
+
+    def test_equal_attack_check_can_gain_final_damage_bonus(self):
+        attacker = _u(name="Attacker")
+        attacker.add_status("伤害强化", 3)
+        target = _u(physical_resist=10)
+        report = _calc_damage(target, 10, "物理", True, attacker=attacker)
+        assert not report.attack_missed
+        assert report.final_damage == 3
+
+    def test_true_damage_attack_can_be_blocked_by_shield(self):
+        target = _u()
+        target.add_status("护盾", 1)
+        report = _calc_true_damage(target, 5, is_attack=True)
+        assert report.blocked_by_shield
+
+    def test_zero_hp_damage_does_not_break_sleep(self):
+        target = _u(physical_resist=10)
+        target.add_status("睡眠")
+        report = _calc_damage(target, 5, "物理", True)
+        assert report.final_damage == 0
+        assert not report.sleep_broken
+
+    def test_frozen_modifies_resistances(self):
+        target = _u(physical_resist=4, magic_resist=4)
+        target.add_status("冻结")
+        assert _calc_damage(target, 20, "物理", True).final_damage == 6
+        assert _calc_damage(target, 20, "法术", True).final_damage == 26
+
+    def test_damage_overflow_reduces_max_hp_and_applies_dying(self):
+        target = _u(current_hp=3, max_hp=10)
+        apply_damage(target, 8, "真实", is_attack=False)
+        assert target.current_hp == 0
+        assert target.max_hp == 5
+        assert target.has_status("濒死")
+
+    def test_dying_target_takes_future_damage_to_max_hp(self):
+        target = _u(current_hp=0, max_hp=10)
+        target.add_status("濒死")
+        apply_damage(target, 4, "真实", is_attack=False)
+        assert target.max_hp == 6
+
+    def test_dying_target_still_uses_temporary_hp_first(self):
+        target = _u(current_hp=0, max_hp=10, temp_hp=5)
+        target.add_status("濒死")
+        apply_damage(target, 3, "真实", is_attack=False)
+        assert target.temp_hp == 2
+        assert target.max_hp == 10
+
+    def test_manual_dying_status_sets_current_hp_to_zero(self):
+        target = _u(current_hp=10, max_hp=10)
+        target.add_status("濒死")
+        assert target.current_hp == 0
+
+    def test_healing_does_not_restore_dying_target(self):
+        target = _u(current_hp=0, max_hp=10)
+        target.add_status("濒死")
+        msg = apply_healing(target, 5)
+        assert target.current_hp == 0
+        assert "濒死" in msg
+
+    def test_regen_block_is_consumed_by_failed_heal(self):
+        target = _u(current_hp=3)
+        target.add_status("禁疗")
+        apply_healing(target, 5)
+        assert target.current_hp == 3
+        assert not target.has_status("禁疗")
+
+    def test_negative_healing_fails_without_mutation(self):
+        target = _u(current_hp=7)
+        msg = apply_healing(target, -3)
+        assert target.current_hp == 7
+        assert msg.startswith("[错误]")
+
+    def test_mark_is_consumed_when_represented_status_is_applied(self):
+        target = _u()
+        target.add_status("标记")
+        apply_status(target, "停顿")
+        assert target.has_status("束缚")
+        assert not target.has_status("标记")
+
+    def test_new_mark_is_consumed_when_it_upgrades_existing_status(self):
+        target = _u()
+        target.add_status("寒冷")
+        apply_status(target, "标记")
+        assert target.has_status("冻结")
+        assert not target.has_status("标记")
+
+    def test_old_drowsy_name_is_normalized(self):
+        target = _u(status_effects=[{"name": "困倦", "stacks": 0}])
+        assert target.has_status("困顿")
+
+    def test_sleep_does_not_clear_at_turn_end(self):
+        target = _u()
+        target.add_status("睡眠")
+        process_end_of_turn(target)
+        assert target.has_status("睡眠")
+
+    def test_disabled_aftermath_needs_a_non_disabled_turn(self):
+        target = _u()
+        target.add_status("失能")
+        process_end_of_turn(target)
+        assert target.has_status("失能后效")
+        process_end_of_turn(target)
+        assert not target.has_status("失能后效")
+
+    def test_elemental_burst_uses_entered_auxiliary_roll(self):
+        target = _u(elemental_tenacity_current=2)
+        msg = apply_elemental_damage(target, 2, "组织损伤", burst_roll=2)
+        assert target.current_hp == 4
+        assert "辅助骰 2 × 3" in msg
+
+    def test_pending_elemental_burst_can_be_resolved_later(self):
+        target = _u(elemental_tenacity_current=2)
+        trigger_msg = apply_elemental_damage(target, 2, "组织损伤")
+        assert "待填写" in trigger_msg
+        assert target.current_hp == 10
+        assert len(target.pending_rolls) == 1
+
+        resolve_msg = resolve_pending_elemental_burst(target, 2)
+        assert "补充结算" in resolve_msg
+        assert target.current_hp == 4
+        assert target.pending_rolls == []
+        assert resolve_pending_elemental_burst(target, 2).startswith("[错误]")
+
+    def test_burst_recovers_at_target_turn_start_not_round_start(self):
+        target = _u(elemental_tenacity_current=0)
+        target.elemental_burst = "毒性损伤"
+        target.elemental_burst_remaining = 1
+        assert process_round_start([target]) == []
+        assert target.is_in_burst()
+        process_turn_start(target)
+        assert not target.is_in_burst()
+        assert target.elemental_tenacity_current == target.elemental_tenacity_max
+
+    def test_traditional_initiative_uses_manual_check_totals(self):
+        slow = _u(name="Slow", speed=1)
+        fast = _u(name="Fast", speed=20)
+        rolls = {slow.unit_id: 30, fast.unit_id: 10}
+        state = traditional_initiative([slow, fast], roll_values=rolls)
+        assert state.turn_order == [slow.unit_id, fast.unit_id]
+        assert state.initiative_rolls == rolls
+
+    def test_traditional_initiative_rejects_unresolved_manual_tie(self):
+        first = _u(name="A", speed=5)
+        second = _u(name="B", speed=5)
+        with pytest.raises(ValueError, match="请重投"):
+            traditional_initiative(
+                [first, second],
+                roll_values={first.unit_id: 20, second.unit_id: 20},
+            )
+
+    def test_deleted_current_actor_does_not_skip_next_survivor(self):
+        deleted = _u(name="Deleted")
+        survivor = _u(name="Survivor")
+        state = CombatState(
+            turn=1,
+            now_index=0,
+            turn_order=[deleted.unit_id, survivor.unit_id],
+            active=True,
+        )
+        state, messages = next_actor(state, [survivor])
+        assert state.turn == 1
+        assert state.current_unit_id == survivor.unit_id

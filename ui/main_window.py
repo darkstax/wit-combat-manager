@@ -2,19 +2,29 @@
 
 import json
 import os
+import sys
 from PySide6.QtWidgets import (
-    QMainWindow, QSplitter, QStatusBar, QGroupBox, QTextEdit,
+    QMainWindow, QSplitter, QStatusBar, QTextEdit,
     QVBoxLayout, QHBoxLayout, QWidget, QLabel, QFileDialog, QSlider,
-    QDialog, QPushButton, QApplication,
+    QDialog, QPushButton, QApplication, QFrame, QTabWidget, QStyle,
+    QScrollArea, QComboBox, QMessageBox, QToolButton, QMenu,
 )
-from PySide6.QtCore import Qt, Signal, QObject
-from PySide6.QtGui import QAction, QPixmap, QPainter, QFont, QColor, QPalette
-from models import Unit
-from persistence import save_data, load_data
+from PySide6.QtCore import QEvent, QPoint, QTimer, Qt, Signal, QObject
+from PySide6.QtGui import QAction, QPixmap, QPainter, QFont
+from app_paths import writable_data_dir
+from models import RuleMode, Unit
+from persistence import load_rosters, load_text, save_rosters, save_text
 from ui.unit_panel import UnitPanel
 from ui.combat_panel import CombatPanel
+from ui.fluent import (
+    animate_window_entrance,
+    apply_fluent_style,
+    fade_in,
+    install_tab_fade,
+    standard_icon,
+)
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+BASE_DIR = str(writable_data_dir())
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
 COMBAT_LOG_PATH = os.path.join(BASE_DIR, "combat_log.txt")
 GM_LOG_PATH = os.path.join(BASE_DIR, "gm_log.txt")
@@ -23,14 +33,14 @@ GM_LOG_PATH = os.path.join(BASE_DIR, "gm_log.txt")
 def _load_settings() -> dict:
     try:
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError, OSError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _save_settings(data: dict):
-    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    save_text(SETTINGS_PATH, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 class LogSignal(QObject):
@@ -43,6 +53,7 @@ class BackgroundWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pixmap: QPixmap | None = None
+        self._scaled_pixmap: QPixmap | None = None
         self._opacity: float = 0.35
 
     def set_background(self, path: str | None, opacity: float = 0.35):
@@ -51,6 +62,7 @@ class BackgroundWidget(QWidget):
             self._opacity = opacity
         else:
             self._pixmap = None
+        self._scaled_pixmap = None
         self.update()
 
     def set_opacity(self, opacity: float):
@@ -62,11 +74,26 @@ class BackgroundWidget(QWidget):
         super().paintEvent(event)
         if not self._pixmap or self._pixmap.isNull():
             return
+        if self._scaled_pixmap is None or self._scaled_pixmap.size() != self.size():
+            scaled = self._pixmap.scaled(
+                self.size(),
+                Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation,
+            )
+            self._scaled_pixmap = scaled.copy(
+                max(0, (scaled.width() - self.width()) // 2),
+                max(0, (scaled.height() - self.height()) // 2),
+                self.width(),
+                self.height(),
+            )
         painter = QPainter(self)
         painter.setOpacity(self._opacity)
-        scaled = self._pixmap.scaled(self.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-        painter.drawPixmap(0, 0, scaled)
+        painter.drawPixmap(0, 0, self._scaled_pixmap)
         painter.end()
+
+    def resizeEvent(self, event):
+        self._scaled_pixmap = None
+        super().resizeEvent(event)
 
 
 class WatermarkDialog(QDialog):
@@ -112,101 +139,170 @@ class WatermarkDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self._integrated_title_bar = False
+        if sys.platform == "win32" and hasattr(Qt, "ExpandedClientAreaHint"):
+            self.setWindowFlags(
+                self.windowFlags()
+                | Qt.ExpandedClientAreaHint
+                | Qt.NoTitleBarBackgroundHint
+            )
+            self._integrated_title_bar = True
+        apply_fluent_style(QApplication.instance())
+        self.setObjectName("AppSurface")
+        self.setAttribute(Qt.WA_ContentsMarginsRespectsSafeArea, False)
         self.setWindowTitle("WIT 战斗管理器 - Walk In the Terra")
-        self.resize(960, 680)
-        self.setMinimumSize(820, 560)
+        self.resize(1180, 780)
+        self.setMinimumSize(900, 620)
 
         self.units: list[Unit] = []
         self.settings = _load_settings()
+        self.rule_mode = RuleMode.coerce(self.settings.get("rule_mode", RuleMode.V1_2))
+        self.rosters = {mode.value: [] for mode in RuleMode}
+        self._changing_rule_mode = False
+        self._loading_logs = False
+        self.rule_browser = None
+        self._safe_area_connected = False
         self._log_signal = LogSignal()
         self._log_signal.message.connect(self._append_log)
 
         self._build_ui()
-        self._build_menu()
         self._apply_background()
         self._load_data()
-
-    # ============================================================
-    # 菜单
-    # ============================================================
-
-    def _build_menu(self):
-        bar = self.menuBar()
-        settings_menu = bar.addMenu("设置")
-
-        bg_action = QAction("设置背景图片...", self)
-        bg_action.triggered.connect(self._set_background)
-        settings_menu.addAction(bg_action)
-
-        clear_bg_action = QAction("清除背景图片", self)
-        clear_bg_action.triggered.connect(self._clear_background)
-        settings_menu.addAction(clear_bg_action)
-
-        watermark_action = QAction("背景水印强度...", self)
-        watermark_action.triggered.connect(self._set_watermark)
-        settings_menu.addAction(watermark_action)
-
-        settings_menu.addSeparator()
-
-        export_log_action = QAction("导出战斗日志...", self)
-        export_log_action.triggered.connect(self._export_log)
-        settings_menu.addAction(export_log_action)
 
     # ============================================================
     # UI
     # ============================================================
 
     def _build_ui(self):
-        # 背景层 + 内容层 共享同一个 central widget
         central = QWidget()
+        central.setObjectName("AppSurface")
+        central.setAttribute(Qt.WA_ContentsMarginsRespectsSafeArea, False)
         self.setCentralWidget(central)
-        # 不使用 layout — 手动管理背景层和内容层的位置
         central.resizeEvent = self._on_central_resize
 
-        # 背景绘制 Widget（填满整个 central）
         self.bg_widget = BackgroundWidget(central)
         self.bg_widget.setGeometry(0, 0, central.width(), central.height())
         self.bg_widget.lower()
 
-        # 内容 Widget（盖在背景上面）
         self.content = QWidget(central)
+        self.content.setObjectName("AppContent")
+        self.content.setAttribute(Qt.WA_ContentsMarginsRespectsSafeArea, False)
         layout = QVBoxLayout(self.content)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        command_bar = QFrame()
+        command_bar.setObjectName("IntegratedTitleBar")
+        command_bar.setMinimumHeight(48)
+        command_layout = QHBoxLayout(command_bar)
+        command_layout.setContentsMargins(14, 4, 10, 4)
+        command_layout.setSpacing(8)
+        self._title_bar_layout = command_layout
+
+        self.rule_mode_combo = QComboBox()
+        self.rule_mode_combo.setToolTip("切换 0.3 / 1.2 规则与独立单位名单")
+        for mode in RuleMode:
+            self.rule_mode_combo.addItem(f"v{mode.value}", mode.value)
+        self.rule_mode_combo.setCurrentIndex(
+            self.rule_mode_combo.findData(self.rule_mode.value)
+        )
+        self.rule_mode_combo.currentIndexChanged.connect(self._on_rule_mode_changed)
+        command_layout.addWidget(self.rule_mode_combo)
+        command_layout.addStretch()
+
+        self.rule_browser_action = QAction("规则查询", self)
+        self.rule_browser_action.setShortcut("Ctrl+K")
+        self.rule_browser_action.triggered.connect(self._open_rule_browser)
+        self.addAction(self.rule_browser_action)
+
+        query_btn = QPushButton("规则查询")
+        query_btn.setIcon(standard_icon(self, QStyle.SP_FileDialogContentsView))
+        query_btn.clicked.connect(self._open_rule_browser)
+        command_layout.addWidget(query_btn)
+
+        self.more_menu = QMenu(self)
+        self.more_menu.addAction(self.rule_browser_action)
+        self.more_menu.addSeparator()
+        bg_action = self.more_menu.addAction("设置背景图片...")
+        bg_action.triggered.connect(self._set_background)
+        opacity_action = self.more_menu.addAction("背景水印强度...")
+        opacity_action.triggered.connect(self._set_watermark)
+        clear_action = self.more_menu.addAction("清除背景图片")
+        clear_action.triggered.connect(self._clear_background)
+        self.more_menu.addSeparator()
+        export_action = self.more_menu.addAction("导出战斗日志...")
+        export_action.triggered.connect(self._export_log)
+        self.more_btn = QToolButton()
+        self.more_btn.setText("更多")
+        self.more_btn.setIcon(standard_icon(self, QStyle.SP_ArrowDown))
+        self.more_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.more_btn.setAccessibleName("更多菜单")
+        self.more_btn.clicked.connect(self._show_more_menu)
+        command_layout.addWidget(self.more_btn)
+        layout.addWidget(command_bar)
+
+        body = QWidget()
+        body.setObjectName("MainBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(12, 0, 12, 10)
+        body_layout.setSpacing(0)
 
         splitter = QSplitter(Qt.Horizontal)
         self.unit_panel = UnitPanel()
+        self.unit_panel.set_rule_mode(self.rule_mode)
         self.unit_panel.units_changed.connect(self._on_units_changed)
         splitter.addWidget(self.unit_panel)
+
+        workspace = QWidget()
+        workspace.setObjectName("Workspace")
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(10, 10, 10, 10)
+        workspace_layout.setSpacing(8)
+
+        work_splitter = QSplitter(Qt.Vertical)
+        work_splitter.setObjectName("WorkSplitter")
+        work_splitter.setHandleWidth(14)
         self.combat_panel = CombatPanel()
+        self.combat_panel.set_rule_mode(self.rule_mode)
         self.combat_panel.set_unit_provider(self.unit_panel)
-        splitter.addWidget(self.combat_panel)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
-        layout.addWidget(splitter, 1)
+        self.unit_panel.selection_changed.connect(self.combat_panel.set_selected_target)
+        self.combat_panel.setMinimumHeight(240)
+        combat_scroll = QScrollArea()
+        combat_scroll.setWidgetResizable(True)
+        combat_scroll.setFrameShape(QFrame.NoFrame)
+        combat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        combat_scroll.setWidget(self.combat_panel)
+        work_splitter.addWidget(combat_scroll)
 
         self.combat_panel.set_log_callback(self.append_log)
 
-        log_splitter = QSplitter(Qt.Horizontal)
-
-        combat_log_group = QGroupBox("战斗日志")
-        combat_log_layout = QVBoxLayout(combat_log_group)
-        combat_log_layout.setContentsMargins(4, 4, 4, 4)
+        log_tabs = QTabWidget()
+        log_tabs.setDocumentMode(True)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(120)
-        combat_log_layout.addWidget(self.log_text)
-        log_splitter.addWidget(combat_log_group)
-
-        gm_log_group = QGroupBox("GM日志")
-        gm_log_layout = QVBoxLayout(gm_log_group)
-        gm_log_layout.setContentsMargins(4, 4, 4, 4)
+        self.log_text.setPlaceholderText("战斗记录会显示在这里")
         self.gm_log_text = QTextEdit()
-        self.gm_log_text.setMaximumHeight(120)
-        gm_log_layout.addWidget(self.gm_log_text)
-        log_splitter.addWidget(gm_log_group)
+        self.gm_log_text.setPlaceholderText("GM 备注")
+        self.gm_log_text.textChanged.connect(self._persist_logs)
+        self.combat_panel.order_heading.setVisible(False)
+        log_tabs.addTab(self.combat_panel.order_list, "行动顺序")
+        log_tabs.addTab(self.log_text, "战斗日志")
+        log_tabs.addTab(self.gm_log_text, "GM 日志")
+        install_tab_fade(log_tabs)
+        work_splitter.addWidget(log_tabs)
+        work_splitter.setStretchFactor(0, 3)
+        work_splitter.setStretchFactor(1, 2)
+        work_splitter.setSizes([300, 280])
+        work_splitter.setChildrenCollapsible(False)
+        workspace_layout.addWidget(work_splitter)
 
-        layout.addWidget(log_splitter, 0)
+        splitter.addWidget(workspace)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([360, 800])
+        splitter.setChildrenCollapsible(False)
+        body_layout.addWidget(splitter, 1)
+        layout.addWidget(body, 1)
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -217,30 +313,81 @@ class MainWindow(QMainWindow):
 
 
     def _enable_transparent_widgets(self):
-        """递归遍历 content 子控件，让文本/列表类控件背景半透明，使自定义背景图透出"""
-        # content 自身透明
-        self.content.setAttribute(Qt.WA_StyledBackground, False)
+        """Keep viewport-backed widgets compatible with the translucent theme."""
+        self.content.setAttribute(Qt.WA_StyledBackground, True)
 
-        from PySide6.QtWidgets import QTextEdit, QListWidget, QTreeWidget, QGroupBox
+        from PySide6.QtWidgets import QTextEdit, QListWidget, QTreeWidget
 
         def _apply(widget: QWidget):
             if isinstance(widget, (QTextEdit, QListWidget, QTreeWidget)):
-                p = widget.palette()
-                p.setColor(QPalette.Base, QColor(255, 255, 255, 25))
-                widget.setPalette(p)
-                # viewport 也需要透明，否则滚动区域内部仍为白底
                 vp = widget.viewport()
                 if vp:
                     vp.setAutoFillBackground(False)
-            elif isinstance(widget, QGroupBox):
-                p = widget.palette()
-                p.setColor(QPalette.Window, QColor(0, 0, 0, 0))
-                widget.setPalette(p)
             for child in widget.children():
                 if isinstance(child, QWidget):
                     _apply(child)
 
         _apply(self.content)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_entrance_animated", False):
+            self._entrance_animated = True
+            animate_window_entrance(self)
+        handle = self.windowHandle()
+        if handle is None:
+            return
+        if not self._safe_area_connected and hasattr(handle, "safeAreaMarginsChanged"):
+            handle.safeAreaMarginsChanged.connect(self._schedule_title_bar_metrics)
+            handle.screenChanged.connect(self._schedule_title_bar_metrics)
+            self._safe_area_connected = True
+        self._schedule_title_bar_metrics()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            self._schedule_title_bar_metrics()
+
+    def _schedule_title_bar_metrics(self, *_args):
+        QTimer.singleShot(0, self._apply_title_safe_area)
+
+    def _apply_title_safe_area(self):
+        if not hasattr(self, "_title_bar_layout"):
+            return
+        handle = self.windowHandle()
+        margins = handle.safeAreaMargins() if handle is not None else None
+        safe_left = max(0, margins.left()) if margins is not None else 0
+        safe_right = max(0, margins.right()) if margins is not None else 0
+        safe_top = max(0, margins.top()) if margins is not None else 0
+
+        # Qt reports the top title-bar inset on Windows, but not the native
+        # caption-button width. Derive it from the system caption height so the
+        # command buttons stay clear across DPI and display changes.
+        caption_width = 0
+        native_title_width = 0
+        if self._integrated_title_bar:
+            caption_width = int(safe_top * 5.4 + 0.999) + 12 if safe_top else 150
+            native_title_width = 300
+        self._title_bar_layout.setContentsMargins(
+            14 + max(safe_left, native_title_width),
+            4,
+            10 + max(safe_right, caption_width),
+            4,
+        )
+
+    def _show_more_menu(self):
+        position = self.more_btn.mapToGlobal(QPoint(0, self.more_btn.height() + 4))
+        self.more_menu.popup(position)
+
+    def _open_rule_browser(self):
+        if self.rule_browser is None:
+            from ui.rule_browser import RuleBrowserDialog
+
+            self.rule_browser = RuleBrowserDialog(
+                self,
+                initial_version=self.rule_mode,
+            )
+        self.rule_browser.open_for_version(self.rule_mode)
 
     def _on_central_resize(self, event):
         """central 大小变化时，同步背景层和内容层"""
@@ -287,24 +434,79 @@ class MainWindow(QMainWindow):
     # ============================================================
 
     def _load_data(self):
-        self.units = load_data()
+        store = load_rosters(default_rule_mode=self.rule_mode)
+        self.rosters = store.rosters
+        self.rule_mode = RuleMode.coerce(store.active_rule_mode)
+        self._changing_rule_mode = True
+        self.rule_mode_combo.setCurrentIndex(
+            self.rule_mode_combo.findData(self.rule_mode.value)
+        )
+        self._changing_rule_mode = False
+        self.units = self.rosters[self.rule_mode.value]
+        self.unit_panel.set_rule_mode(self.rule_mode)
+        self.combat_panel.set_rule_mode(self.rule_mode)
         self.unit_panel.load_units(self.units)
         self._load_logs()
         self._update_status()
 
     def _on_units_changed(self, units: list[Unit]):
         self.units = units
-        self._save()
-        self._update_status()
+        saved = self._save()
+        self.unit_panel.last_persist_ok = saved
+        if saved:
+            self._update_status()
 
-    def _save(self):
-        path = save_data(self.units)
-        self.status_label.setText(f"已保存到 {path}")
+    def _save(self) -> bool:
+        try:
+            self.rosters[self.rule_mode.value] = self.units
+            path = save_rosters(self.rosters, self.rule_mode)
+            self.status_label.setText(f"已保存到 {path}")
+            return True
+        except OSError as exc:
+            self.status_label.setText(f"保存失败: {exc}")
+            return False
 
     def _update_status(self):
         p_count = sum(1 for u in self.units if u.unit_type == "player")
         m_count = sum(1 for u in self.units if u.unit_type == "monster")
-        self.status_label.setText(f"玩家: {p_count} | 怪物: {m_count} | 共 {len(self.units)} 单位")
+        self.status_label.setText(
+            f"规则 v{self.rule_mode.value} | 玩家: {p_count} | "
+            f"怪物: {m_count} | 共 {len(self.units)} 单位"
+        )
+
+    def _on_rule_mode_changed(self):
+        if self._changing_rule_mode:
+            return
+        requested = RuleMode.coerce(self.rule_mode_combo.currentData())
+        if requested == self.rule_mode:
+            return
+        if self.combat_panel.combat_state and self.combat_panel.combat_state.active:
+            QMessageBox.information(self, "战斗进行中", "请先结束当前战斗，再切换规则版本。")
+            self._changing_rule_mode = True
+            self.rule_mode_combo.setCurrentIndex(
+                self.rule_mode_combo.findData(self.rule_mode.value)
+            )
+            self._changing_rule_mode = False
+            return
+
+        self.rosters[self.rule_mode.value] = self.units
+        self.rule_mode = requested
+        self.units = self.rosters.setdefault(requested.value, [])
+        self.unit_panel.set_rule_mode(requested)
+        self.unit_panel.load_units(self.units)
+        self.combat_panel.set_rule_mode(requested)
+        self.combat_panel.set_selected_target(None)
+        if self.rule_browser is not None:
+            self.rule_browser.set_version(requested)
+        self.settings["rule_mode"] = requested.value
+        try:
+            _save_settings(self.settings)
+        except OSError as exc:
+            self.status_label.setText(f"设置保存失败: {exc}")
+        self._save()
+        self._update_status()
+        fade_in(self.unit_panel, duration=170, start_opacity=0.82)
+        fade_in(self.combat_panel, duration=170, start_opacity=0.82)
 
     def closeEvent(self, event):
         try:
@@ -326,20 +528,27 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, message: str):
         self.log_text.append(message)
+        self._persist_logs()
+
+    def _persist_logs(self):
+        if self._loading_logs:
+            return
+        try:
+            self._save_logs()
+        except OSError as exc:
+            self.status_label.setText(f"日志保存失败: {exc}")
 
     def _save_logs(self):
-        with open(COMBAT_LOG_PATH, "w", encoding="utf-8") as f:
-            f.write(self.log_text.toPlainText())
-        with open(GM_LOG_PATH, "w", encoding="utf-8") as f:
-            f.write(self.gm_log_text.toPlainText())
+        save_text(COMBAT_LOG_PATH, self.log_text.toPlainText())
+        save_text(GM_LOG_PATH, self.gm_log_text.toPlainText())
 
     def _load_logs(self):
-        for path, widget in [(COMBAT_LOG_PATH, self.log_text), (GM_LOG_PATH, self.gm_log_text)]:
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    widget.setPlainText(f.read())
-            except (FileNotFoundError, PermissionError, OSError):
-                pass
+        self._loading_logs = True
+        try:
+            self.log_text.setPlainText(load_text(COMBAT_LOG_PATH))
+            self.gm_log_text.setPlainText(load_text(GM_LOG_PATH))
+        finally:
+            self._loading_logs = False
 
     def _export_log(self):
         path, _ = QFileDialog.getSaveFileName(

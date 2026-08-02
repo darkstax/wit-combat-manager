@@ -3,12 +3,13 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTreeWidget,
     QTreeWidgetItem, QTextEdit, QRadioButton, QButtonGroup,
-    QFileDialog, QMessageBox, QDialog, QLabel, QLineEdit, QTextEdit,
-    QDialogButtonBox,
+    QFileDialog, QMessageBox, QDialog, QLabel, QLineEdit,
+    QDialogButtonBox, QMenu,
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import QPoint, Signal
 from PySide6.QtGui import QColor, QBrush
-from models import Unit, THEME
+from models import RuleMode, Unit, THEME
+from ui.fluent import fade_in, section_label, set_button_role
 
 
 class QuickImportDialog(QDialog):
@@ -17,21 +18,30 @@ class QuickImportDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("快速导入角色")
-        self.setMinimumSize(500, 300)
+        self.setMinimumSize(560, 390)
         self.result_data = None
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
 
-        layout.addWidget(QLabel("角色名称:"))
+        title = QLabel("快速导入角色")
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+
+        layout.addWidget(QLabel("角色名称"))
         self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("未填写时使用“快速导入角色”")
         layout.addWidget(self.name_edit)
 
-        layout.addWidget(QLabel("粘贴骰娘导出文本:"))
+        layout.addWidget(QLabel("骰娘导出文本"))
         self.text_edit = QTextEdit()
+        self.text_edit.setPlaceholderText("在此粘贴导出的角色数据")
         layout.addWidget(self.text_edit)
 
         buttons = QDialogButtonBox()
         import_btn = QPushButton("导入")
+        set_button_role(import_btn, "primary")
         cancel_btn = QPushButton("取消")
         buttons.addButton(import_btn, buttons.ActionRole)
         buttons.addButton(cancel_btn, buttons.RejectRole)
@@ -53,18 +63,31 @@ class QuickImportDialog(QDialog):
 
 class UnitPanel(QWidget):
     units_changed = Signal(list)
+    selection_changed = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("NavigationPane")
         self.units: list[Unit] = []
+        self.last_persist_ok = True
+        self.rule_mode = RuleMode.V1_2
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(9)
 
-        # 筛选
+        heading = QHBoxLayout()
+        title = QLabel("单位")
+        title.setObjectName("PageTitle")
+        heading.addWidget(title)
+        heading.addStretch()
+        self.count_label = QLabel("0 个单位")
+        self.count_label.setObjectName("SecondaryText")
+        heading.addWidget(self.count_label)
+        layout.addLayout(heading)
+
         filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("筛选:"))
+        filter_layout.setSpacing(4)
         self.filter_group = QButtonGroup(self)
         for label, val in [("全部", "全部"), ("玩家", "player"), ("怪物", "monster")]:
             rb = QRadioButton(label)
@@ -76,49 +99,68 @@ class UnitPanel(QWidget):
             else:
                 rb.val = val
             rb.toggled.connect(self._refresh_tree)
-        filter_layout.addStretch()
         layout.addLayout(filter_layout)
 
-        # 单位列表
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["类型", "名称", "HP", "速度", "韧性"])
-        self.tree.setColumnWidth(0, 45)
-        self.tree.setColumnWidth(1, 110)
-        self.tree.setColumnWidth(2, 65)
-        self.tree.setColumnWidth(3, 50)
-        self.tree.setColumnWidth(4, 65)
-        self.tree.setMaximumHeight(175)
+        self.tree.setColumnWidth(0, 42)
+        self.tree.setColumnWidth(1, 92)
+        self.tree.setColumnWidth(2, 60)
+        self.tree.setColumnWidth(3, 44)
+        self.tree.setColumnWidth(4, 58)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setAlternatingRowColors(True)
         self.tree.currentItemChanged.connect(self._on_select)
-        layout.addWidget(self.tree)
+        layout.addWidget(self.tree, 3)
 
-        # 详情
+        self.detail_heading = section_label("单位信息")
+        self.detail_heading.setVisible(False)
+        layout.addWidget(self.detail_heading)
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
-        self.detail_text.setMinimumHeight(130)
+        self.detail_text.setMinimumHeight(104)
+        self.detail_text.setMaximumHeight(148)
+        self.detail_text.setPlaceholderText("选择单位后显示属性与状态")
+        self.detail_text.setVisible(False)
         layout.addWidget(self.detail_text)
 
-        # 按钮行 1
-        btn1 = QHBoxLayout()
-        for text, slot in [
-            ("添加玩家", lambda: self._add_unit("player")),
-            ("添加怪物", lambda: self._add_unit("monster")),
-            ("编辑单位", self._edit_unit),
-            ("删除单位", self._delete_unit),
-        ]:
-            btn = QPushButton(text)
-            btn.clicked.connect(slot)
-            btn1.addWidget(btn)
-        layout.addLayout(btn1)
+        command_bar = QHBoxLayout()
+        command_bar.setSpacing(6)
 
-        # 按钮行 2 — 导入
-        btn2 = QHBoxLayout()
-        import_btn = QPushButton("导入角色卡 (xlsx)")
-        import_btn.clicked.connect(self._import_card)
-        btn2.addWidget(import_btn)
-        quick_btn = QPushButton("快速导入 (文本)")
-        quick_btn.clicked.connect(self._import_quick_text)
-        btn2.addWidget(quick_btn)
-        layout.addLayout(btn2)
+        self.add_btn = QPushButton("添加")
+        set_button_role(self.add_btn, "primary")
+        add_menu = QMenu(self.add_btn)
+        add_menu.addAction("添加玩家", lambda: self._add_unit("player"))
+        add_menu.addAction("添加怪物", lambda: self._add_unit("monster"))
+        self.add_btn.clicked.connect(
+            lambda: add_menu.popup(
+                self.add_btn.mapToGlobal(QPoint(0, self.add_btn.height() + 4))
+            )
+        )
+        command_bar.addWidget(self.add_btn, 1)
+
+        edit_btn = QPushButton("编辑")
+        edit_btn.clicked.connect(self._edit_unit)
+        command_bar.addWidget(edit_btn, 1)
+
+        delete_btn = QPushButton("删除")
+        set_button_role(delete_btn, "danger")
+        delete_btn.clicked.connect(self._delete_unit)
+        command_bar.addWidget(delete_btn, 1)
+
+        self.import_btn = QPushButton("导入")
+        import_menu = QMenu(self.import_btn)
+        self.card_import_action = import_menu.addAction("v1.2 角色卡")
+        self.card_import_action.triggered.connect(self._import_card)
+        import_menu.addAction("文本导入", self._import_quick_text)
+        self.import_btn.clicked.connect(
+            lambda: import_menu.popup(
+                self.import_btn.mapToGlobal(QPoint(0, self.import_btn.height() + 4))
+            )
+        )
+        command_bar.addWidget(self.import_btn, 1)
+        layout.addLayout(command_bar)
 
     # ============================================================
     # 数据
@@ -129,7 +171,11 @@ class UnitPanel(QWidget):
         self._refresh_tree()
 
     def _refresh_tree(self):
+        had_selection = self.tree.currentItem() is not None
         self.tree.clear()
+        if had_selection:
+            self.selection_changed.emit(None)
+        self.count_label.setText(f"{len(self.units)} 个单位")
         f = None
         for rb in self.filter_group.buttons():
             if rb.isChecked():
@@ -146,10 +192,10 @@ class UnitPanel(QWidget):
                 f"{u.elemental_tenacity_current}/{u.elemental_tenacity_max}",
             ])
             item.unit_id = u.unit_id
-            if u.unit_type == "player":
-                item.setBackground(0, QBrush(QColor(THEME["current_actor_bg"])))
-            else:
-                item.setBackground(0, QBrush(QColor(THEME["monster_row_bg"])))
+            if u.unit_type == "monster":
+                brush = QBrush(QColor(THEME["monster_row_bg"]))
+                for column in range(self.tree.columnCount()):
+                    item.setBackground(column, brush)
             self.tree.addTopLevelItem(item)
 
     def get_selected_unit(self) -> Unit | None:
@@ -162,7 +208,11 @@ class UnitPanel(QWidget):
         return None
 
     def _on_select(self):
-        self._show_detail(self.get_selected_unit())
+        unit = self.get_selected_unit()
+        self._show_detail(unit)
+        self.selection_changed.emit(unit)
+        if unit is not None:
+            fade_in(self.detail_text, duration=130, start_opacity=0.76)
 
     # ============================================================
     # 详情
@@ -171,8 +221,12 @@ class UnitPanel(QWidget):
     def _show_detail(self, unit: Unit | None):
         self.detail_text.clear()
         if not unit:
-            self.detail_text.setPlainText("请选择一个单位")
+            self.detail_heading.setVisible(False)
+            self.detail_text.setVisible(False)
             return
+
+        self.detail_heading.setVisible(True)
+        self.detail_text.setVisible(True)
 
         type_label = "玩家" if unit.unit_type == "player" else "怪物"
         elite_labels = {0: "精零", 1: "精一", 2: "精二"}
@@ -182,15 +236,23 @@ class UnitPanel(QWidget):
 
         status_text = "、".join(fmt_status(s) for s in unit.status_effects) if unit.status_effects else "无"
         burst_info = f"{unit.elemental_burst}（剩余{unit.elemental_burst_remaining}回合）" if unit.is_in_burst() else "无"
+        pending_info = f"{len(unit.pending_rolls)} 项" if unit.pending_rolls else "无"
 
+        stage_text = (
+            elite_labels.get(unit.elite_stage, "")
+            if self.rule_mode == RuleMode.V1_2 else ""
+        )
         lines = [
-            f"名称: {unit.name}  [{type_label}]  {elite_labels.get(unit.elite_stage, '')}",
+            f"名称: {unit.name}  [{type_label}]  规则 v{self.rule_mode.value}  {stage_text}",
             f"ID: {unit.unit_id}",
-            f"血量: {unit.current_hp}/{unit.max_hp}  临时HP: {unit.temp_hp}",
-            f"速度: {unit.speed}  重量: {unit.weight}",
+            f"职业: {unit.profession or '未填写'}  分支: {unit.subprofession or '未填写'}  等级: {unit.level}",
+            f"血量: {unit.current_hp}/{unit.max_hp}  初始上限: {unit.initial_max_hp}  临时HP: {unit.temp_hp}",
+            f"伤残等级: {unit.injury_level()}  SP: {unit.current_sp}/{unit.max_sp}  耐力: {unit.current_stamina}/{unit.max_stamina}",
+            f"速度: {unit.speed}  反应机动: {unit.reaction_mobility}  重量: {unit.weight}",
+            f"效能骰: {unit.effect_die or '--'}  辅助骰: {unit.auxiliary_die or '--'}",
             f"物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  护甲: {unit.armor_type}",
             f"元素韧性: {unit.elemental_tenacity_current}/{unit.elemental_tenacity_max}",
-            f"当前爆发: {burst_info}",
+            f"当前爆发: {burst_info}  待结算骰: {pending_info}",
             f"状态: {status_text}",
         ]
         self.detail_text.setPlainText("\n".join(lines))
@@ -201,8 +263,17 @@ class UnitPanel(QWidget):
 
     def _add_unit(self, unit_type: str = "player"):
         from ui.unit_dialog import UnitDialog
-        unit = Unit(unit_type=unit_type)
-        dlg = UnitDialog(unit, self)
+        if self.rule_mode == RuleMode.V0_3:
+            unit = Unit(
+                unit_type=unit_type,
+                elemental_tenacity_current=10,
+                elemental_tenacity_max=10,
+                current_sp=0,
+                max_sp=0,
+            )
+        else:
+            unit = Unit(unit_type=unit_type)
+        dlg = UnitDialog(unit, self, self.rule_mode)
         if dlg.exec() == UnitDialog.Accepted and dlg.result:
             self.units.append(dlg.result)
             self._refresh_tree()
@@ -214,10 +285,11 @@ class UnitPanel(QWidget):
             QMessageBox.information(self, "提示", "请先选择一个单位")
             return
         from ui.unit_dialog import UnitDialog
-        dlg = UnitDialog(unit, self)
+        dlg = UnitDialog(unit, self, self.rule_mode)
         if dlg.exec() == UnitDialog.Accepted and dlg.result:
             self._refresh_tree()
             self._show_detail(dlg.result)
+            fade_in(self.detail_text, duration=130, start_opacity=0.76)
             self._notify_change()
 
     def _delete_unit(self):
@@ -233,6 +305,7 @@ class UnitPanel(QWidget):
             self.units.remove(unit)
             self._refresh_tree()
             self._show_detail(None)
+            self.selection_changed.emit(None)
             self._notify_change()
 
     def _import_card(self):
@@ -243,8 +316,9 @@ class UnitPanel(QWidget):
         if not filepath:
             return
         try:
-            from character_card import import_character_card
-            unit = import_character_card(filepath)
+            from character_card import import_character_card_with_report
+            report = import_character_card_with_report(filepath, self.rule_mode)
+            unit = report.unit
         except FileNotFoundError:
             QMessageBox.critical(self, "导入失败", f"文件不存在: {filepath}")
             return
@@ -265,7 +339,8 @@ class UnitPanel(QWidget):
             self, "导入成功",
             f"已导入角色: {unit.name}\n"
             f"HP: {unit.max_hp}  物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  "
-            f"精英: {unit.elite_stage}"
+            f"规则: v{report.detected_rule_mode.value}  精英: {unit.elite_stage}"
+            + (f"\n提示: {'；'.join(report.warnings)}" if report.warnings else "")
         )
 
     def _import_quick_text(self):
@@ -274,7 +349,11 @@ class UnitPanel(QWidget):
             return
         try:
             from character_card import import_from_quick_text
-            unit = import_from_quick_text(dlg.result_data["text"], name=dlg.result_data["name"])
+            unit = import_from_quick_text(
+                dlg.result_data["text"],
+                rule_mode=self.rule_mode,
+                name=dlg.result_data["name"],
+            )
         except Exception as e:
             QMessageBox.critical(self, "导入失败", f"无法解析文本:\n{e}")
             return
@@ -308,3 +387,24 @@ class UnitPanel(QWidget):
             if u.unit_id == unit_id:
                 return u
         return None
+
+    def set_rule_mode(self, rule_mode: RuleMode | str):
+        self.rule_mode = RuleMode.coerce(rule_mode)
+        if hasattr(self, "card_import_action"):
+            self.card_import_action.setText(f"v{self.rule_mode.value} 角色卡")
+        self._refresh_tree()
+
+    def commit_changes(self):
+        """Refresh combat mutations and persist them through the public signal."""
+        selected = self.get_selected_unit()
+        selected_id = selected.unit_id if selected else None
+        self._refresh_tree()
+        if selected_id:
+            for index in range(self.tree.topLevelItemCount()):
+                item = self.tree.topLevelItem(index)
+                if getattr(item, "unit_id", None) == selected_id:
+                    self.tree.setCurrentItem(item)
+                    break
+        self._show_detail(self.find_unit(selected_id) if selected_id else None)
+        self._notify_change()
+        return self.last_persist_ok

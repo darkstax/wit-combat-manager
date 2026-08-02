@@ -59,7 +59,7 @@ def _stylesheet() -> str:
         background: transparent;
     }}
     QFrame#CommandBar, QFrame#BattleCommandBar,
-    QFrame#StatusPanel, QFrame#LogPanel {{
+    QFrame#StatusPanel, QFrame#LogPanel, QFrame#TargetContext {{
         background: {p['surface']};
         border: 1px solid {p['border']};
         border-radius: 8px;

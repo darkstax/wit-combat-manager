@@ -2,173 +2,419 @@
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox,
-    QSpinBox, QComboBox, QCheckBox, QPushButton,
+    QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QPushButton,
     QLabel, QListWidget, QListWidgetItem, QMessageBox, QFrame,
+    QTabWidget, QStyle, QDialog, QDialogButtonBox, QFormLayout,
+    QScrollArea, QLineEdit,
+    QAbstractItemView, QLayout, QSizePolicy, QToolButton,
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QBrush
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QBrush, QIntValidator
 from models import (
-    Unit, CombatState, ALL_STATUS_NAMES,
-    X_STATUSES, ELEMENT_TYPES, THEME,
+    Unit, CombatState, RuleMode, ALL_STATUS_NAMES,
+    X_STATUSES, ELEMENT_TYPES, STATUS_DEFINITIONS, THEME,
+    element_types_for, status_names_for, x_statuses_for,
 )
 from combat import (
     team_initiative, traditional_initiative, manual_initiative,
     apply_damage, apply_healing, apply_elemental_damage,
+    resolve_pending_elemental_burst,
     apply_status, clear_all_statuses, next_actor, advance_turn,
 )
 from persistence import save_combat_state, load_combat_state, delete_combat_state
+from ui.fluent import install_tab_fade, pulse, section_label, set_button_role, standard_icon
+
+
+class InitiativeRollDialog(QDialog):
+    """Collect player-entered reaction/mobility check results."""
+
+    def __init__(
+        self,
+        units: list[Unit],
+        rule_mode: RuleMode | str = RuleMode.V1_2,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.rule_mode = RuleMode.coerce(rule_mode)
+        self.setWindowTitle(
+            "录入同速对抗 d100" if self.rule_mode == RuleMode.V0_3
+            else "录入反应机动检定"
+        )
+        self.setMinimumSize(480, 420)
+        self.result_values: dict[str, int] | None = None
+        self._edits: dict[str, QLineEdit] = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+
+        title = QLabel(
+            "同速对抗 d100" if self.rule_mode == RuleMode.V0_3
+            else "反应机动检定"
+        )
+        title.setObjectName("PageTitle")
+        layout.addWidget(title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        form = QFormLayout(container)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        for unit in units:
+            edit = QLineEdit()
+            if self.rule_mode == RuleMode.V0_3:
+                edit.setValidator(QIntValidator(1, 100, edit))
+                edit.setPlaceholderText("1-100")
+            else:
+                edit.setValidator(QIntValidator(0, 9999, edit))
+                edit.setPlaceholderText("必填")
+            type_name = "玩家" if unit.unit_type == "player" else "怪物"
+            form.addRow(f"{unit.name}  ·  {type_name}", edit)
+            self._edits[unit.unit_id] = edit
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        buttons = QDialogButtonBox()
+        confirm_btn = QPushButton("确认并开始")
+        set_button_role(confirm_btn, "primary")
+        cancel_btn = QPushButton("取消")
+        buttons.addButton(confirm_btn, QDialogButtonBox.AcceptRole)
+        buttons.addButton(cancel_btn, QDialogButtonBox.RejectRole)
+        confirm_btn.clicked.connect(self._accept_values)
+        cancel_btn.clicked.connect(self.reject)
+        layout.addWidget(buttons)
+
+        if self._edits:
+            next(iter(self._edits.values())).setFocus()
+
+    def _accept_values(self):
+        values = {}
+        for unit_id, edit in self._edits.items():
+            text = edit.text().strip()
+            if not text:
+                edit.setFocus()
+                QMessageBox.warning(self, "检定未填写", "请填写每个单位的反应机动检定结果")
+                return
+            values[unit_id] = int(text)
+        self.result_values = values
+        self.accept()
 
 
 class CombatPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.rule_mode = RuleMode.V1_2
         self.combat_state: CombatState | None = None
         self.unit_provider = None
+        self.selected_target: Unit | None = None
+        self.operation_buttons: list[QPushButton] = []
+        self._refreshing_order = False
         self._log_callback = print  # 默认直接 print，连接后走主窗口日志
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setSizeConstraint(QLayout.SetMinimumSize)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignTop)
 
-        # ---- 先攻模式（下拉栏） ----
-        mode_group = QGroupBox("先攻模式")
-        mode_layout = QVBoxLayout(mode_group)
+        # ---- 先攻与战斗命令栏 ----
+        command_panel = QFrame()
+        command_panel.setObjectName("BattleCommandBar")
+        command_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        command_layout = QGridLayout(command_panel)
+        command_layout.setContentsMargins(10, 10, 10, 10)
+        command_layout.setHorizontalSpacing(6)
+        command_layout.setVerticalSpacing(8)
 
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("模式:"))
+        command_layout.addWidget(QLabel("先攻"), 0, 0)
         self.init_mode_combo = QComboBox()
         self.init_mode_combo.addItem("传统先攻", "traditional")
         self.init_mode_combo.addItem("团队先攻", "team")
         self.init_mode_combo.addItem("客观判断", "manual")
         self.init_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        mode_row.addWidget(self.init_mode_combo)
-        mode_row.addStretch()
-        mode_layout.addLayout(mode_row)
+        self.init_mode_combo.setMinimumWidth(112)
+        command_layout.addWidget(self.init_mode_combo, 0, 1)
 
         self._manual_row = QHBoxLayout()
-        self._manual_row.addWidget(QLabel("先动阵营:"))
+        self._manual_row.setContentsMargins(0, 0, 0, 0)
+        self._manual_row.addWidget(QLabel("先动阵营"))
         self.manual_team_combo = QComboBox()
-        self.manual_team_combo.addItems(["player", "monster"])
+        self.manual_team_combo.addItem("玩家", "player")
+        self.manual_team_combo.addItem("怪物", "monster")
         self._manual_row.addWidget(self.manual_team_combo)
-        self._manual_row.addStretch()
-        mode_layout.addLayout(self._manual_row)
+        manual_container = QWidget()
+        manual_container.setLayout(self._manual_row)
+        command_layout.addWidget(manual_container, 0, 2)
 
         self._dice_row = QHBoxLayout()
-        self._dice_row.addWidget(QLabel("检定骰子:"))
-        self.dice_spin = QSpinBox()
-        self.dice_spin.setRange(2, 100)
-        self.dice_spin.setValue(20)
-        self._dice_row.addWidget(self.dice_spin)
-        self._dice_row.addWidget(QLabel("面"))
-        self._dice_row.addStretch()
-        mode_layout.addLayout(self._dice_row)
+        self._dice_row.setContentsMargins(0, 0, 0, 0)
+        traditional_label = QLabel("录入反应机动")
+        traditional_label.setToolTip("开始战斗时逐单位填写反应机动检定结果")
+        traditional_label.setObjectName("SecondaryText")
+        self._dice_row.addWidget(traditional_label)
+        dice_container = QWidget()
+        dice_container.setLayout(self._dice_row)
+        command_layout.addWidget(dice_container, 0, 2)
 
         self._on_mode_changed(0)
-        layout.addWidget(mode_group)
-
-        # ---- 战斗状态 ----
-        info_group = QGroupBox("战斗状态")
-        info_layout = QHBoxLayout(info_group)
-        self.turn_label = QLabel("Turn: 0")
-        self.turn_label.setStyleSheet("font-size: 14px; font-weight: bold;")
-        info_layout.addWidget(self.turn_label)
-        self.now_label = QLabel("Now: --")
-        self.now_label.setStyleSheet("font-size: 14px;")
-        info_layout.addWidget(self.now_label)
+        self.turn_label = QLabel("轮次 0")
+        self.turn_label.setObjectName("StatusBadge")
+        command_layout.addWidget(self.turn_label, 0, 4)
+        self.now_label = QLabel("当前行动 --")
+        self.now_label.setObjectName("StatusBadge")
+        command_layout.addWidget(self.now_label, 0, 5)
         self.team_score_label = QLabel("")
-        info_layout.addWidget(self.team_score_label)
-        info_layout.addStretch()
-        layout.addWidget(info_group)
+        self.team_score_label.setObjectName("SecondaryText")
+        self.team_score_label.setWordWrap(True)
+        self.team_score_label.setVisible(False)
+        command_layout.addWidget(self.team_score_label, 2, 0, 1, 8)
 
         # ---- 战斗控制按钮 ----
-        btn_row = QHBoxLayout()
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(6)
         self.start_btn = QPushButton("开始战斗")
+        set_button_role(self.start_btn, "primary")
         self.start_btn.clicked.connect(self._start_combat)
-        btn_row.addWidget(self.start_btn)
+        action_row.addWidget(self.start_btn, 1)
 
         self.next_btn = QPushButton("下一行动")
         self.next_btn.clicked.connect(self._next_action)
         self.next_btn.setEnabled(False)
-        btn_row.addWidget(self.next_btn)
+        action_row.addWidget(self.next_btn, 1)
 
-        self.end_turn_btn = QPushButton("结束回合")
+        self.end_turn_btn = QPushButton("强制下一轮")
         self.end_turn_btn.clicked.connect(self._end_turn)
         self.end_turn_btn.setEnabled(False)
-        btn_row.addWidget(self.end_turn_btn)
+        action_row.addWidget(self.end_turn_btn, 1)
 
         self.end_combat_btn = QPushButton("结束战斗")
+        set_button_role(self.end_combat_btn, "danger")
         self.end_combat_btn.clicked.connect(self._end_combat)
         self.end_combat_btn.setEnabled(False)
-        btn_row.addWidget(self.end_combat_btn)
-        layout.addLayout(btn_row)
+        action_row.addWidget(self.end_combat_btn, 1)
+        command_layout.addLayout(action_row, 1, 0, 1, 8)
+        command_layout.setColumnStretch(3, 1)
+        layout.addWidget(command_panel)
 
-        # ---- 战斗操作（合并） ----
-        ops_group = QGroupBox("战斗操作")
-        ops_grid = QGridLayout(ops_group)
-        ops_grid.setSpacing(4)
+        # ---- 战斗操作 ----
+        layout.addWidget(section_label("计算操作"))
+        target_context = QFrame()
+        target_context.setObjectName("TargetContext")
+        target_layout = QHBoxLayout(target_context)
+        target_layout.setContentsMargins(10, 6, 10, 6)
+        target_layout.setSpacing(8)
+        target_layout.addWidget(QLabel("目标"))
+        self.target_context_label = QLabel("未选择单位")
+        self.target_context_label.setObjectName("SecondaryText")
+        target_layout.addWidget(self.target_context_label, 1)
+        layout.addWidget(target_context)
 
-        # 行 0：伤害/治疗
-        ops_grid.addWidget(QLabel("伤害/治疗"), 0, 0)
-        ops_grid.addWidget(QLabel("数值:"), 0, 1)
+        self.operations_tabs = QTabWidget()
+        self.operations_tabs.setObjectName("OperationsTabs")
+        self.operations_tabs.setDocumentMode(True)
+        self.operations_tabs.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        self.operations_tabs.setMinimumHeight(164)
+
+        damage_tab = QWidget()
+        damage_layout = QVBoxLayout(damage_tab)
+        damage_layout.setContentsMargins(14, 12, 14, 14)
+        damage_layout.setSpacing(8)
+        damage_grid = QGridLayout()
+        damage_grid.setHorizontalSpacing(12)
+        damage_grid.setVerticalSpacing(6)
+        self.damage_amount_label = QLabel("攻击检定 / 折前伤害")
+        self.damage_amount_label.setToolTip("填写攻击检定骰值或抗性折减前的伤害")
+        damage_grid.addWidget(self.damage_amount_label, 0, 0)
         self.dmg_amount_spin = QSpinBox()
         self.dmg_amount_spin.setRange(1, 9999)
         self.dmg_amount_spin.setValue(5)
-        ops_grid.addWidget(self.dmg_amount_spin, 0, 2)
-        ops_grid.addWidget(QLabel("类型:"), 0, 3)
+        self.dmg_amount_spin.setMaximumWidth(240)
+        damage_grid.addWidget(self.dmg_amount_spin, 1, 0)
+        damage_grid.addWidget(QLabel("伤害类型"), 0, 1)
         self.dmg_type_combo = QComboBox()
         self.dmg_type_combo.addItems(["物理", "法术", "真实", "治疗"])
-        ops_grid.addWidget(self.dmg_type_combo, 0, 4)
-        self.is_attack_cb = QCheckBox("攻击")
+        self.dmg_type_combo.setMaximumWidth(240)
+        damage_grid.addWidget(self.dmg_type_combo, 1, 1)
+        self.final_damage_cb = QCheckBox("忽略抗性")
+        self.final_damage_cb.setToolTip("直接按输入值结算，不再扣减目标抗性")
+        self.is_attack_cb = QCheckBox("按攻击规则")
+        self.is_attack_cb.setToolTip(
+            "启用命中、护盾、攻击者增益与攻击后状态；"
+            "持续伤害、环境伤害等直接伤害请关闭"
+        )
         self.is_attack_cb.setChecked(True)
-        ops_grid.addWidget(self.is_attack_cb, 0, 5)
+        self.is_attack_cb.toggled.connect(
+            lambda _checked: self._on_damage_type_changed(
+                self.dmg_type_combo.currentText()
+            )
+        )
         apply_dmg_btn = QPushButton("施加")
+        apply_dmg_btn.setMinimumWidth(84)
+        set_button_role(apply_dmg_btn, "primary")
         apply_dmg_btn.clicked.connect(self._apply_damage)
-        ops_grid.addWidget(apply_dmg_btn, 0, 6)
+        damage_grid.addWidget(apply_dmg_btn, 1, 2, 1, 1)
+        self.operation_buttons.append(apply_dmg_btn)
+        damage_grid.setColumnStretch(0, 2)
+        damage_grid.setColumnStretch(1, 2)
+        damage_grid.setColumnStretch(2, 1)
+        damage_layout.addLayout(damage_grid)
 
-        # 行 1：元素损伤
-        ops_grid.addWidget(QLabel("元素损伤"), 1, 0)
-        ops_grid.addWidget(QLabel("数值:"), 1, 1)
+        self.damage_modifiers_toggle = QToolButton()
+        self.damage_modifiers_toggle.setText("修正")
+        self.damage_modifiers_toggle.setCheckable(True)
+        self.damage_modifiers_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.damage_modifiers_toggle.setArrowType(Qt.RightArrow)
+        self.damage_modifiers_toggle.toggled.connect(self._set_damage_modifiers_visible)
+        damage_layout.addWidget(self.damage_modifiers_toggle, 0, Qt.AlignLeft)
+
+        self.damage_modifiers = QWidget()
+        modifier_grid = QGridLayout(self.damage_modifiers)
+        modifier_grid.setContentsMargins(0, 0, 0, 0)
+        modifier_grid.setHorizontalSpacing(12)
+        modifier_grid.setVerticalSpacing(8)
+        self.aux_damage_cb = QCheckBox("加入辅助骰伤害")
+        modifier_grid.addWidget(self.aux_damage_cb, 1, 0)
+        self.aux_damage_spin = QSpinBox()
+        self.aux_damage_spin.setRange(0, 9999)
+        self.aux_damage_spin.setMaximumWidth(240)
+        self.aux_damage_spin.setEnabled(False)
+        self.aux_damage_cb.toggled.connect(self.aux_damage_spin.setEnabled)
+        modifier_grid.addWidget(self.aux_damage_spin, 1, 1)
+        self.half_damage_cb = QCheckBox("伤害减半")
+        self.half_damage_cb.setToolTip("最终结算伤害乘以 50%")
+        modifier_grid.addWidget(self.half_damage_cb, 0, 2)
+        modifier_grid.addWidget(self.is_attack_cb, 0, 0)
+        modifier_grid.addWidget(self.final_damage_cb, 0, 1)
+
+        self.v03_attack_label = QLabel("命中 d100 / 成功率")
+        modifier_grid.addWidget(self.v03_attack_label, 2, 0)
+        self.v03_attack_roll_spin = QSpinBox()
+        self.v03_attack_roll_spin.setRange(1, 100)
+        modifier_grid.addWidget(self.v03_attack_roll_spin, 2, 1)
+        self.v03_success_rate_spin = QSpinBox()
+        self.v03_success_rate_spin.setRange(0, 100)
+        self.v03_success_rate_spin.setValue(50)
+        modifier_grid.addWidget(self.v03_success_rate_spin, 2, 2)
+        self.v03_dying_save_combo = QComboBox()
+        self.v03_dying_save_combo.addItem("濒死检定：暂不结算", None)
+        self.v03_dying_save_combo.addItem("濒死检定：成功", True)
+        self.v03_dying_save_combo.addItem("濒死检定：失败", False)
+        modifier_grid.addWidget(self.v03_dying_save_combo, 3, 0, 1, 3)
+        self.v03_formula_label = QLabel("常规倍率 / 最终常数")
+        modifier_grid.addWidget(self.v03_formula_label, 4, 0)
+        self.v03_normal_multiplier_spin = QDoubleSpinBox()
+        self.v03_normal_multiplier_spin.setRange(0.0, 99.0)
+        self.v03_normal_multiplier_spin.setDecimals(2)
+        self.v03_normal_multiplier_spin.setSingleStep(0.1)
+        self.v03_normal_multiplier_spin.setValue(1.0)
+        modifier_grid.addWidget(self.v03_normal_multiplier_spin, 4, 1)
+        self.v03_final_constant_spin = QSpinBox()
+        self.v03_final_constant_spin.setRange(-9999, 9999)
+        modifier_grid.addWidget(self.v03_final_constant_spin, 4, 2)
+        self.dmg_type_combo.currentTextChanged.connect(self._on_damage_type_changed)
+        self._on_damage_type_changed(self.dmg_type_combo.currentText())
+        modifier_grid.setColumnStretch(0, 2)
+        modifier_grid.setColumnStretch(1, 2)
+        modifier_grid.setColumnStretch(2, 1)
+        self.damage_modifiers.setVisible(False)
+        damage_layout.addWidget(self.damage_modifiers)
+        self.operations_tabs.addTab(damage_tab, "伤害")
+
+        element_tab = QWidget()
+        element_grid = QGridLayout(element_tab)
+        element_grid.setContentsMargins(14, 12, 14, 14)
+        element_grid.setHorizontalSpacing(12)
+        element_grid.setVerticalSpacing(10)
+        element_grid.addWidget(QLabel("数值"), 0, 0)
         self.elem_amount_spin = QSpinBox()
         self.elem_amount_spin.setRange(1, 999)
         self.elem_amount_spin.setValue(2)
-        ops_grid.addWidget(self.elem_amount_spin, 1, 2)
-        ops_grid.addWidget(QLabel("类型:"), 1, 3)
+        element_grid.addWidget(self.elem_amount_spin, 0, 1)
+        element_grid.addWidget(QLabel("类型"), 0, 2)
         self.elem_type_combo = QComboBox()
         self.elem_type_combo.addItems(ELEMENT_TYPES)
-        ops_grid.addWidget(self.elem_type_combo, 1, 4)
+        element_grid.addWidget(self.elem_type_combo, 0, 3)
         apply_elem_btn = QPushButton("施加")
+        set_button_role(apply_elem_btn, "primary")
         apply_elem_btn.clicked.connect(self._apply_elem_dmg)
-        ops_grid.addWidget(apply_elem_btn, 1, 6)
+        element_grid.addWidget(apply_elem_btn, 0, 4)
+        self.operation_buttons.append(apply_elem_btn)
+        element_grid.setColumnStretch(5, 1)
 
-        # 行 2：状态操作
-        ops_grid.addWidget(QLabel("状态操作"), 2, 0)
-        ops_grid.addWidget(QLabel("状态:"), 2, 1)
+        self.burst_roll_cb = QCheckBox("同时填写爆发骰")
+        element_grid.addWidget(self.burst_roll_cb, 1, 0, 1, 2)
+        self.burst_roll_label = QLabel("单次骰值")
+        element_grid.addWidget(self.burst_roll_label, 1, 2)
+        self.burst_roll_spin = QSpinBox()
+        self.burst_roll_spin.setRange(0, 9999)
+        self.burst_roll_spin.setEnabled(False)
+        self.burst_roll_cb.toggled.connect(self.burst_roll_spin.setEnabled)
+        element_grid.addWidget(self.burst_roll_spin, 1, 3)
+        self.resolve_burst_btn = QPushButton("补结待处理爆发")
+        self.resolve_burst_btn.setEnabled(False)
+        self.burst_roll_cb.toggled.connect(lambda _checked: self._update_operation_actions())
+        self.resolve_burst_btn.clicked.connect(self._resolve_pending_burst)
+        element_grid.addWidget(self.resolve_burst_btn, 1, 4)
+        self.operation_buttons.append(self.resolve_burst_btn)
+        self.element_resistance_label = QLabel("元素抗性")
+        element_grid.addWidget(self.element_resistance_label, 2, 0)
+        self.element_resistance_spin = QSpinBox()
+        self.element_resistance_spin.setRange(0, 9999)
+        element_grid.addWidget(self.element_resistance_spin, 2, 1)
+        self.operations_tabs.addTab(element_tab, "元素损伤")
+
+        status_tab = QWidget()
+        status_grid = QGridLayout(status_tab)
+        status_grid.setContentsMargins(14, 12, 14, 14)
+        status_grid.setHorizontalSpacing(12)
+        status_grid.setVerticalSpacing(10)
+        status_grid.addWidget(QLabel("状态"), 0, 0)
         self.status_combo = QComboBox()
         self.status_combo.addItems(ALL_STATUS_NAMES)
-        ops_grid.addWidget(self.status_combo, 2, 2)
-        self.x_label = QLabel("X:")
+        status_grid.addWidget(self.status_combo, 0, 1)
+        self.x_label = QLabel("X")
         self.x_spin = QSpinBox()
         self.x_spin.setRange(0, 99)
-        ops_grid.addWidget(self.x_label, 2, 3)
-        ops_grid.addWidget(self.x_spin, 2, 4)
+        status_grid.addWidget(self.x_label, 0, 2)
+        status_grid.addWidget(self.x_spin, 0, 3)
         apply_status_btn = QPushButton("施加")
+        set_button_role(apply_status_btn, "primary")
         apply_status_btn.clicked.connect(self._apply_status)
-        ops_grid.addWidget(apply_status_btn, 2, 5)
+        status_grid.addWidget(apply_status_btn, 0, 4)
+        self.operation_buttons.append(apply_status_btn)
         clear_status_btn = QPushButton("清除全部")
+        set_button_role(clear_status_btn, "danger")
         clear_status_btn.clicked.connect(self._clear_current_status)
-        ops_grid.addWidget(clear_status_btn, 2, 6)
+        status_grid.addWidget(clear_status_btn, 0, 5)
+        self.operation_buttons.append(clear_status_btn)
+        self.use_resistance_cb = QCheckBox("允许目标消耗抵抗")
+        self.use_resistance_cb.setChecked(True)
+        status_grid.addWidget(self.use_resistance_cb, 1, 0, 1, 2)
+        self.save_succeeded_cb = QCheckBox("豁免检定成功")
+        status_grid.addWidget(self.save_succeeded_cb, 1, 2, 1, 2)
+        status_grid.setColumnStretch(6, 1)
 
         self.status_combo.currentTextChanged.connect(self._on_status_selected)
         self._on_status_selected(self.status_combo.currentText())
-        layout.addWidget(ops_group)
+        self.operations_tabs.addTab(status_tab, "状态")
+        install_tab_fade(self.operations_tabs)
+        layout.addWidget(self.operations_tabs)
 
         # ---- 行动顺序 ----
-        order_group = QGroupBox("行动顺序")
-        order_layout = QVBoxLayout(order_group)
+        self.order_heading = section_label("行动顺序")
+        layout.addWidget(self.order_heading)
         self.order_list = QListWidget()
-        self.order_list.setMaximumHeight(140)
-        order_layout.addWidget(self.order_list)
-        layout.addWidget(order_group, 1)
+        self.order_list.setAlternatingRowColors(True)
+        self.order_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.order_list.setDefaultDropAction(Qt.MoveAction)
+        self.order_list.model().rowsMoved.connect(
+            lambda *_: QTimer.singleShot(0, self._sync_order_from_list)
+        )
+        layout.addWidget(self.order_list, 1)
+        self.set_rule_mode(self.rule_mode)
+        self._update_operation_actions()
 
     # ============================================================
     # 接口
@@ -176,19 +422,97 @@ class CombatPanel(QWidget):
 
     def set_unit_provider(self, panel):
         self.unit_provider = panel
+        self.set_selected_target(panel.get_selected_unit())
+
+    def set_selected_target(self, unit: Unit | None):
+        self.selected_target = unit
+        if unit is None:
+            self.target_context_label.setText("未选择单位")
+        else:
+            unit_type = "玩家" if unit.unit_type == "player" else "怪物"
+            self.target_context_label.setText(
+                f"{unit.name} · {unit_type} · HP {unit.current_hp}/{unit.max_hp}"
+            )
+        self._update_operation_actions()
+
+    def _update_operation_actions(self):
+        has_target = self.selected_target is not None
+        for button in self.operation_buttons:
+            if button is self.resolve_burst_btn:
+                button.setEnabled(has_target and self.burst_roll_cb.isChecked())
+            else:
+                button.setEnabled(has_target)
+
+    def _set_damage_modifiers_visible(self, visible: bool):
+        self.damage_modifiers.setVisible(visible)
+        self.damage_modifiers_toggle.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
 
     def set_log_callback(self, callback):
         """设置日志回调，替代 print 劫持 sys.stdout 的方式"""
         self._log_callback = callback
 
+    def set_rule_mode(self, rule_mode: RuleMode | str):
+        self.rule_mode = RuleMode.coerce(rule_mode)
+
+        self.init_mode_combo.blockSignals(True)
+        self.init_mode_combo.clear()
+        if self.rule_mode == RuleMode.V0_3:
+            self.init_mode_combo.addItem("速度先攻", "v03_speed")
+        else:
+            self.init_mode_combo.addItem("传统先攻", "traditional")
+            self.init_mode_combo.addItem("团队先攻", "team")
+            self.init_mode_combo.addItem("客观判断", "manual")
+        self.init_mode_combo.blockSignals(False)
+
+        self.status_combo.blockSignals(True)
+        self.status_combo.clear()
+        self.status_combo.addItems(status_names_for(self.rule_mode))
+        self.status_combo.blockSignals(False)
+        self.elem_type_combo.clear()
+        self.elem_type_combo.addItems(element_types_for(self.rule_mode))
+
+        is_v03 = self.rule_mode == RuleMode.V0_3
+        self.damage_amount_label.setText(
+            "伤害骰结果 / 折前伤害" if is_v03 else "攻击检定 / 折前伤害"
+        )
+        self.v03_attack_label.setVisible(is_v03)
+        self.v03_attack_roll_spin.setVisible(is_v03)
+        self.v03_success_rate_spin.setVisible(is_v03)
+        self.v03_dying_save_combo.setVisible(is_v03)
+        self.v03_formula_label.setVisible(is_v03)
+        self.v03_normal_multiplier_spin.setVisible(is_v03)
+        self.v03_final_constant_spin.setVisible(is_v03)
+        self.element_resistance_label.setVisible(is_v03)
+        self.element_resistance_spin.setVisible(is_v03)
+        self.burst_roll_label.setText("10d6 爆发总值" if is_v03 else "单次骰值")
+        self.use_resistance_cb.setVisible(not is_v03)
+        self.save_succeeded_cb.setVisible(not is_v03)
+        self.operations_tabs.setMinimumHeight(308 if is_v03 else 164)
+        self._on_mode_changed(0)
+        self._on_status_selected(self.status_combo.currentText())
+        self._on_damage_type_changed(self.dmg_type_combo.currentText())
+
     def _get_target(self) -> Unit | None:
-        if not self.unit_provider:
-            return None
-        if self.combat_state and self.combat_state.active:
-            cur_id = self.combat_state.current_unit_id
-            if cur_id:
-                return self.unit_provider.find_unit(cur_id)
-        return self.unit_provider.get_selected_unit()
+        return self.selected_target
+
+    def _commit_unit_changes(self):
+        if self.unit_provider:
+            saved = self.unit_provider.commit_changes()
+        else:
+            saved = True
+        self._refresh_order_list()
+        self.set_selected_target(self._get_target())
+        return saved
+
+    def _persist_combat_state(self) -> bool:
+        if not self.combat_state:
+            return True
+        try:
+            save_combat_state(self.combat_state)
+            return True
+        except OSError as exc:
+            self._log(f"[错误] 战斗进度保存失败: {exc}")
+            return False
 
     # ============================================================
     # 战斗操作
@@ -207,9 +531,17 @@ class CombatPanel(QWidget):
 
         saved = load_combat_state()
         if saved and saved.active:
+            if RuleMode.coerce(saved.rule_mode) != self.rule_mode:
+                QMessageBox.information(
+                    self,
+                    "战斗规则不一致",
+                    f"未完成战斗使用 v{RuleMode.coerce(saved.rule_mode).value}，"
+                    f"请切换到该版本后再恢复。",
+                )
+                return
             reply = QMessageBox.question(
                 self, "恢复战斗",
-                f"检测到第 {saved.turn} 回合的未完成战斗，是否继续？",
+                f"检测到第 {saved.turn} 轮的未完成战斗，是否继续？",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
             )
             if reply == QMessageBox.Yes:
@@ -224,33 +556,65 @@ class CombatPanel(QWidget):
             if not players or not monsters:
                 QMessageBox.information(self, "提示", "团队先攻模式需要至少一个玩家和一个怪物")
                 return
-            self.combat_state = team_initiative(players, monsters)
+            self.combat_state = team_initiative(
+                players, monsters, rule_mode=self.rule_mode
+            )
             p_s = sorted([u.speed for u in players])
             m_s = sorted([u.speed for u in monsters])
             p_team = (max(p_s) + min(p_s)) if len(p_s) >= 2 else (p_s[0] * 2 if p_s else 0)
             m_team = (max(m_s) + min(m_s)) if len(m_s) >= 2 else (m_s[0] * 2 if m_s else 0)
-            self.team_score_label.setText(
+            self._set_team_score(
                 f"玩家团队值: {p_team} | 怪物团队值: {m_team} | "
                 f"{'玩家' if self.combat_state.first_team == 'player' else '怪物'}先动"
             )
         elif mode == "manual":
-            first = self.manual_team_combo.currentText()
-            self.combat_state = manual_initiative(first, players, monsters)
-            self.team_score_label.setText(
+            first = self.manual_team_combo.currentData()
+            self.combat_state = manual_initiative(
+                first, players, monsters, rule_mode=self.rule_mode
+            )
+            self._set_team_score(
                 f"客观判断: {'玩家' if self.combat_state.first_team == 'player' else '怪物'}先行")
         else:
-            self.combat_state = traditional_initiative(all_units, self.dice_spin.value())
+            roll_units = all_units
+            if self.rule_mode == RuleMode.V0_3:
+                grouped: dict[tuple[int, int], list[Unit]] = {}
+                for unit in all_units:
+                    grouped.setdefault(
+                        (unit.speed, unit.reaction_mobility), []
+                    ).append(unit)
+                roll_units = [
+                    unit for group in grouped.values() if len(group) > 1
+                    for unit in group
+                ]
+            roll_values: dict[str, int] = {}
+            if roll_units:
+                dialog = InitiativeRollDialog(roll_units, self.rule_mode, self)
+                if dialog.exec() != QDialog.Accepted or dialog.result_values is None:
+                    return
+                roll_values = dialog.result_values
+            try:
+                self.combat_state = traditional_initiative(
+                    all_units,
+                    roll_values=roll_values,
+                    rule_mode=self.rule_mode,
+                )
+            except ValueError as exc:
+                QMessageBox.warning(self, "检定结果无效", str(exc))
+                return
             rolls = self.combat_state.initiative_rolls
             lines = []
             for uid, roll in sorted(rolls.items(), key=lambda x: x[1], reverse=True):
                 unit = self.unit_provider.find_unit(uid)
                 name = unit.name if unit else uid
-                lines.append(f"{name}: d{self.dice_spin.value()}+{unit.speed if unit else '?'}={roll}")
-            self.team_score_label.setText(" | ".join(lines))
+                label = "d100" if self.rule_mode == RuleMode.V0_3 else "反应机动"
+                lines.append(f"{name}: {label} {roll}")
+            if self.rule_mode == RuleMode.V0_3 and not lines:
+                lines.append("按速度、反应机动排序；无完全同值单位")
+            self._set_team_score(" | ".join(lines))
 
         self._update_ui_state()
         self._refresh_order_list()
-        save_combat_state(self.combat_state)
+        self._persist_combat_state()
 
     def _next_action(self):
         if not self.combat_state or not self.combat_state.active:
@@ -260,8 +624,10 @@ class CombatPanel(QWidget):
         for msg in messages:
             self._log(msg)
         self._update_ui_state()
-        self._refresh_order_list()
-        save_combat_state(self.combat_state)
+        if self._commit_unit_changes():
+            self._persist_combat_state()
+        else:
+            self._log("[错误] 单位数据未保存，战斗进度暂未写入；请修复存档路径后重试")
 
     def _end_turn(self):
         if not self.combat_state:
@@ -271,25 +637,27 @@ class CombatPanel(QWidget):
         for msg in messages:
             self._log(msg)
         self._update_ui_state()
-        self._refresh_order_list()
-        save_combat_state(self.combat_state)
+        if self._commit_unit_changes():
+            self._persist_combat_state()
+        else:
+            self._log("[错误] 单位数据未保存，战斗进度暂未写入；请修复存档路径后重试")
 
     def _end_combat(self):
         if not self.combat_state:
             return
         reply = QMessageBox.question(
             self, "结束战斗",
-            f"确定要在第 {self.combat_state.turn} 回合结束战斗吗？",
+            f"确定要在第 {self.combat_state.turn} 轮结束战斗吗？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply == QMessageBox.Yes:
             self.combat_state.active = False
             self.combat_state = None
             delete_combat_state()
-            self.turn_label.setText("Turn: --")
-            self.now_label.setText("Now: --")
-            self.team_score_label.setText("")
-            self.order_list.clear()
+            self.turn_label.setText("轮次 --")
+            self.now_label.setText("当前行动 --")
+            self._set_team_score("")
+            self._refresh_order_list()
             self.start_btn.setEnabled(True)
             self.next_btn.setEnabled(False)
             self.end_turn_btn.setEnabled(False)
@@ -300,13 +668,13 @@ class CombatPanel(QWidget):
     # ============================================================
 
     def _apply_damage(self):
-        target = self.unit_provider.get_selected_unit() if self.unit_provider else None
+        target = self._get_target()
         if not target:
             QMessageBox.information(self, "提示", "请先在左侧选择一个目标单位")
             return
         amount = self.dmg_amount_spin.value()
         dmg_type = self.dmg_type_combo.currentText()
-        is_attack = self.is_attack_cb.isChecked()
+        is_attack = self.is_attack_cb.isChecked() and dmg_type != "治疗"
 
         attacker = None
         if is_attack and self.combat_state and self.combat_state.active:
@@ -314,17 +682,40 @@ class CombatPanel(QWidget):
             if cur_id:
                 attacker = self.unit_provider.find_unit(cur_id)
             if attacker is None:
-                QMessageBox.information(self, "提示", "勾选了「攻击」但无法确定当前回合方，请先开始战斗")
+                QMessageBox.information(self, "提示", "勾选了「攻击」但无法确定当前行动者，请先开始战斗")
                 return
 
         if dmg_type == "治疗":
-            msg = apply_healing(target, amount)
+            msg = apply_healing(target, amount, rule_mode=self.rule_mode)
         else:
-            msg = apply_damage(target, amount, dmg_type, is_attack, attacker=attacker)
+            msg = apply_damage(
+                target,
+                amount,
+                dmg_type,
+                is_attack,
+                attacker=attacker,
+                amount_is_final=self.final_damage_cb.isChecked(),
+                auxiliary_damage=self.aux_damage_spin.value() if self.aux_damage_cb.isChecked() else 0,
+                final_multiplier=0.5 if self.half_damage_cb.isChecked() else 1.0,
+                rule_mode=self.rule_mode,
+                attack_roll=(
+                    self.v03_attack_roll_spin.value()
+                    if self.rule_mode == RuleMode.V0_3 and is_attack else None
+                ),
+                success_rate=(
+                    self.v03_success_rate_spin.value()
+                    if self.rule_mode == RuleMode.V0_3 and is_attack else None
+                ),
+                dying_save_succeeded=(
+                    self.v03_dying_save_combo.currentData()
+                    if self.rule_mode == RuleMode.V0_3 else None
+                ),
+                normal_multiplier=self.v03_normal_multiplier_spin.value(),
+                final_constant=self.v03_final_constant_spin.value(),
+            )
 
         self._log(msg)
-        self.unit_provider._refresh_tree()
-        self._refresh_order_list()
+        self._commit_unit_changes()
 
     def _apply_elem_dmg(self):
         target = self._get_target()
@@ -333,10 +724,31 @@ class CombatPanel(QWidget):
             return
         amount = self.elem_amount_spin.value()
         elem_type = self.elem_type_combo.currentText()
-        msg = apply_elemental_damage(target, amount, elem_type)
+        burst_roll = self.burst_roll_spin.value() if self.burst_roll_cb.isChecked() else None
+        msg = apply_elemental_damage(
+            target,
+            amount,
+            elem_type,
+            burst_roll=burst_roll,
+            rule_mode=self.rule_mode,
+            element_resistance=self.element_resistance_spin.value(),
+        )
         self._log(msg)
-        self.unit_provider._refresh_tree()
-        self._refresh_order_list()
+        self._commit_unit_changes()
+
+    def _resolve_pending_burst(self):
+        target = self._get_target()
+        if not target:
+            QMessageBox.information(self, "提示", "请先在左侧选择一个目标单位")
+            return
+        msg = resolve_pending_elemental_burst(
+            target,
+            self.burst_roll_spin.value(),
+            rule_mode=self.rule_mode,
+            element_resistance=self.element_resistance_spin.value(),
+        )
+        self._log(msg)
+        self._commit_unit_changes()
 
     def _apply_status(self):
         target = self._get_target()
@@ -346,11 +758,17 @@ class CombatPanel(QWidget):
         status_name = self.status_combo.currentText()
         if not status_name:
             return
-        stacks = self.x_spin.value() if status_name in X_STATUSES else 0
-        msg = apply_status(target, status_name, stacks)
+        stacks = self.x_spin.value() if status_name in x_statuses_for(self.rule_mode) else 0
+        msg = apply_status(
+            target,
+            status_name,
+            stacks,
+            use_resistance=self.use_resistance_cb.isChecked(),
+            save_succeeded=self.save_succeeded_cb.isChecked(),
+            rule_mode=self.rule_mode,
+        )
         self._log(msg)
-        self.unit_provider._refresh_tree()
-        self._refresh_order_list()
+        self._commit_unit_changes()
 
     def _clear_current_status(self):
         target = self._get_target()
@@ -362,8 +780,7 @@ class CombatPanel(QWidget):
             self._log(f"{target.name} 清除了全部状态: {'、'.join(removed)}")
         else:
             self._log(f"{target.name} 无状态可清除")
-        self.unit_provider._refresh_tree()
-        self._refresh_order_list()
+        self._commit_unit_changes()
 
     # ============================================================
     # UI 刷新
@@ -372,13 +789,19 @@ class CombatPanel(QWidget):
     def _update_ui_state(self):
         if not self.combat_state or not self.combat_state.active:
             return
-        self.turn_label.setText(f"Turn: {self.combat_state.turn}")
+        self.turn_label.setText(f"轮次 {self.combat_state.turn}")
         cur_id = self.combat_state.current_unit_id
         if cur_id and self.unit_provider:
             unit = self.unit_provider.find_unit(cur_id)
-            self.now_label.setText(f"Now: {unit.name if unit else cur_id}")
+            if unit:
+                self.now_label.setText(
+                    f"当前行动 {unit.name} · HP {unit.current_hp}/{unit.max_hp}"
+                )
+            else:
+                self.now_label.setText(f"当前行动 {cur_id}")
         else:
-            self.now_label.setText("Now: --")
+            self.now_label.setText("当前行动 --")
+        pulse(self.now_label)
 
         self.start_btn.setEnabled(False)
         self.next_btn.setEnabled(True)
@@ -386,8 +809,13 @@ class CombatPanel(QWidget):
         self.end_combat_btn.setEnabled(True)
 
     def _refresh_order_list(self):
+        self._refreshing_order = True
         self.order_list.clear()
         if not self.combat_state:
+            placeholder = QListWidgetItem("暂无行动顺序。添加单位后开始战斗。")
+            placeholder.setFlags(Qt.NoItemFlags)
+            self.order_list.addItem(placeholder)
+            self._refreshing_order = False
             return
         for i, uid in enumerate(self.combat_state.turn_order):
             unit = self.unit_provider.find_unit(uid) if self.unit_provider else None
@@ -399,11 +827,29 @@ class CombatPanel(QWidget):
             tenacity = f"韧性:{unit.elemental_tenacity_current}/{unit.elemental_tenacity_max}"
             line = f"{i + 1}. {unit.name}  [{hp}] [{tenacity}]{roll_text}"
             if i == self.combat_state.now_index:
-                line += "  <- NOW"
+                line += "  · 当前行动"
             item = QListWidgetItem(line)
+            item.setData(Qt.UserRole, uid)
             if i == self.combat_state.now_index:
                 item.setBackground(QBrush(QColor(THEME["current_actor_bg"])))
             self.order_list.addItem(item)
+        self._refreshing_order = False
+
+    def _sync_order_from_list(self):
+        if self._refreshing_order or not self.combat_state:
+            return
+        current_id = self.combat_state.current_unit_id
+        order = [
+            self.order_list.item(index).data(Qt.UserRole)
+            for index in range(self.order_list.count())
+        ]
+        self.combat_state.turn_order = [uid for uid in order if uid]
+        if current_id in self.combat_state.turn_order:
+            self.combat_state.now_index = self.combat_state.turn_order.index(current_id)
+        else:
+            self.combat_state.now_index = 0
+        self._refresh_order_list()
+        self._persist_combat_state()
 
     def _on_mode_changed(self, index: int):
         """先攻模式切换时显示/隐藏相关子控件"""
@@ -417,16 +863,53 @@ class CombatPanel(QWidget):
         for i in range(self._dice_row.count()):
             w = self._dice_row.itemAt(i).widget()
             if w:
-                w.setVisible(mode == "traditional")
+                w.setVisible(mode in {"traditional", "v03_speed"})
+
+    def _set_team_score(self, text: str):
+        self.team_score_label.setText(text)
+        self.team_score_label.setVisible(bool(text))
 
     def _on_status_selected(self, status: str):
-        if status in X_STATUSES:
+        if status in x_statuses_for(self.rule_mode):
             self.x_label.show()
             self.x_spin.show()
         else:
             self.x_label.hide()
             self.x_spin.hide()
             self.x_spin.setValue(0)
+        if self.rule_mode == RuleMode.V0_3:
+            self.use_resistance_cb.setEnabled(False)
+            self.save_succeeded_cb.setEnabled(False)
+            return
+        definition = STATUS_DEFINITIONS.get(status)
+        is_negative = bool(definition and definition.polarity == "negative")
+        self.use_resistance_cb.setEnabled(is_negative)
+        self.save_succeeded_cb.setEnabled(is_negative)
+        if not is_negative:
+            self.save_succeeded_cb.setChecked(False)
+
+    def _on_damage_type_changed(self, damage_type: str):
+        is_healing = damage_type == "治疗"
+        is_true = damage_type == "真实"
+        if self.operations_tabs.count():
+            self.operations_tabs.setTabText(0, "治疗" if is_healing else "伤害")
+        self.is_attack_cb.setEnabled(not is_healing)
+        self.final_damage_cb.setEnabled(not is_healing and not is_true)
+        self.aux_damage_cb.setEnabled(not is_healing and not is_true)
+        self.aux_damage_spin.setEnabled(
+            self.aux_damage_cb.isChecked() and self.aux_damage_cb.isEnabled()
+        )
+        self.half_damage_cb.setEnabled(not is_healing and not is_true)
+        v03_attack_inputs = (
+            self.rule_mode == RuleMode.V0_3 and not is_healing
+            and self.is_attack_cb.isChecked()
+        )
+        self.v03_attack_roll_spin.setEnabled(v03_attack_inputs)
+        self.v03_success_rate_spin.setEnabled(v03_attack_inputs)
+        if is_healing or is_true:
+            self.final_damage_cb.setChecked(False)
+            self.aux_damage_cb.setChecked(False)
+            self.half_damage_cb.setChecked(False)
 
     def _log(self, msg: str):
         for line in msg.split("\n"):

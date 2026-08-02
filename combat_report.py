@@ -6,19 +6,29 @@ from dataclasses import dataclass, field
 @dataclass
 class DamageReport:
     """apply_damage 的计算结果（纯数据，不含格式化）"""
+    attack_missed: bool = False
     blocked_by_shield: bool = False
     shield_remaining: int = 0
     raw_amount: int = 0
+    damage_type: str = ""
+    resistance: int = 0
     resist_reduced: int = 0
     dmg_boost_added: int = 0
     vuln_added: int = 0
+    auxiliary_added: int = 0
+    final_multiplier: float = 1.0
     barrier_absorbed: int = 0
     temp_hp_after: int = 0
     barrier_depleted: bool = False
     final_damage: int = 0
     hp_before: int = 0
     hp_after: int = 0
+    max_hp_before: int = 0
+    max_hp_after: int = 0
+    max_hp_damage: int = 0
     is_dying: bool = False
+    was_dying: bool = False
+    is_dead: bool = False
     sleep_broken: bool = False
 
 
@@ -26,6 +36,8 @@ class DamageReport:
 class HealingReport:
     """apply_healing 的计算结果"""
     blocked_by_regen_block: bool = False
+    blocked_by_dying: bool = False
+    invalid_amount: bool = False
     affinity_consumed: bool = False
     hp_before: int = 0
     hp_after: int = 0
@@ -38,6 +50,8 @@ class StatusReport:
     """apply_status 的计算结果"""
     blocked_by_immune: bool = False
     blocked_by_resist: bool = False
+    blocked_by_save: bool = False
+    invalid_status: bool = False
     resist_remaining: int = 0
     is_mark: bool = False
     mark_sub_triggers: list[str] = field(default_factory=list)
@@ -50,7 +64,9 @@ class StatusReport:
     simple_applied: bool = False
     already_exists: bool = False
     status_name: str = ""
+    requested_name: str = ""
     stacks_delta: int = 0
+    mark_consumed: bool = False
 
 
 @dataclass
@@ -67,3 +83,10 @@ class ElementalReport:
     burst_type: str = ""
     burst_statuses: list[str] = field(default_factory=list)
     overflow: int = 0  # 超出韧性的损伤量，应在 mutation 层 ×3 转真伤
+    invalid_type: bool = False
+    invalid_amount: bool = False
+    burst_roll_required: bool = False
+    burst_roll: int = 0
+    burst_damage_instances: int = 0
+    burst_true_damage: int = 0
+    sp_spent: int = 0
