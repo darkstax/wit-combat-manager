@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QPoint, Signal, QTimer
 from PySide6.QtGui import QColor, QBrush
-from models import RuleMode, Unit, THEME
+from models import RuleMode, Unit, THEME, UNIT_TYPE_LABELS
 from ui.fluent import fade_in, section_label, set_button_role
 
 
@@ -157,7 +157,7 @@ class UnitPanel(QWidget):
         filter_layout = QHBoxLayout()
         filter_layout.setSpacing(4)
         self.filter_group = QButtonGroup(self)
-        for label, val in [("全部", "全部"), ("玩家", "player"), ("怪物", "monster")]:
+        for label, val in [("全部", "全部"), ("玩家", "player"), ("怪物", "monster"), ("友方", "ally")]:
             rb = QRadioButton(label)
             self.filter_group.addButton(rb)
             filter_layout.addWidget(rb)
@@ -201,6 +201,7 @@ class UnitPanel(QWidget):
         add_menu = QMenu(self.add_btn)
         add_menu.addAction("添加玩家", lambda: self._add_unit("player"))
         add_menu.addAction("添加怪物", lambda: self._add_unit("monster"))
+        add_menu.addAction("添加友方", lambda: self._add_unit("ally"))
         self.add_btn.clicked.connect(
             lambda: add_menu.popup(
                 self.add_btn.mapToGlobal(QPoint(0, self.add_btn.height() + 4))
@@ -252,7 +253,7 @@ class UnitPanel(QWidget):
         for u in self.units:
             if f != "全部" and u.unit_type != f:
                 continue
-            type_label = "玩家" if u.unit_type == "player" else "怪物"
+            type_label = UNIT_TYPE_LABELS.get(u.unit_type, u.unit_type)
             item = QTreeWidgetItem([
                 type_label, u.name,
                 f"{u.current_hp}/{u.max_hp}",
@@ -262,6 +263,10 @@ class UnitPanel(QWidget):
             item.unit_id = u.unit_id
             if u.unit_type == "monster":
                 brush = QBrush(QColor(THEME["monster_row_bg"]))
+                for column in range(self.tree.columnCount()):
+                    item.setBackground(column, brush)
+            elif u.unit_type == "ally":
+                brush = QBrush(QColor(THEME["ally_row_bg"]))
                 for column in range(self.tree.columnCount()):
                     item.setBackground(column, brush)
             self.tree.addTopLevelItem(item)
@@ -296,7 +301,7 @@ class UnitPanel(QWidget):
         self.detail_heading.setVisible(True)
         self.detail_text.setVisible(True)
 
-        type_label = "玩家" if unit.unit_type == "player" else "怪物"
+        type_label = UNIT_TYPE_LABELS.get(unit.unit_type, unit.unit_type)
         elite_labels = {0: "精零", 1: "精一", 2: "精二"}
 
         def fmt_status(s):
@@ -342,10 +347,12 @@ class UnitPanel(QWidget):
         else:
             unit = Unit(unit_type=unit_type)
         dlg = UnitDialog(unit, self, self.rule_mode)
-        if dlg.exec() == UnitDialog.Accepted and dlg.result:
-            self.units.append(dlg.result)
-            self._refresh_tree()
-            self._notify_change()
+        if dlg.exec() == UnitDialog.Accepted:
+            saved = dlg.saved_units or ([dlg.result] if dlg.result else [])
+            if saved:
+                self.units.extend(saved)
+                self._refresh_tree()
+                self._notify_change()
 
     def _edit_unit(self):
         unit = self.get_selected_unit()
@@ -461,7 +468,7 @@ class UnitPanel(QWidget):
     # ============================================================
 
     def get_players(self) -> list[Unit]:
-        return [u for u in self.units if u.unit_type == "player"]
+        return [u for u in self.units if u.unit_type in ("player", "ally")]
 
     def get_monsters(self) -> list[Unit]:
         return [u for u in self.units if u.unit_type == "monster"]

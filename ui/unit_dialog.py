@@ -75,6 +75,7 @@ class UnitDialog(QDialog):
         self.type_combo = QComboBox()
         self.type_combo.addItem("玩家", "player")
         self.type_combo.addItem("怪物", "monster")
+        self.type_combo.addItem("友方", "ally")
         form.addRow("类型", self.type_combo)
 
         self.profession_combo = QComboBox()

@@ -1,4 +1,4 @@
-from models import DiceGroup, RollInput, Unit
+from models import DiceGroup, RollInput, Unit, UNIT_TYPES, UNIT_TYPE_LABELS, THEME
 
 
 def test_manual_roll_input_sums_groups_and_modifier():
@@ -44,3 +44,25 @@ def test_pending_rolls_round_trip_with_unit_data():
     )
     loaded = Unit.from_dict(unit.to_dict())
     assert loaded.pending_rolls == unit.pending_rolls
+
+
+def test_ally_unit_type_round_trip():
+    unit = Unit(name="Lancer", unit_type="ally")
+    loaded = Unit.from_dict(unit.to_dict())
+    assert loaded.unit_type == "ally"
+
+
+def test_unknown_unit_type_normalized_to_player():
+    assert Unit(name="Weird", unit_type="weird").unit_type == "player"
+
+
+def test_unit_type_labels_complete():
+    for t in UNIT_TYPES:
+        assert UNIT_TYPE_LABELS.get(t) is not None
+    assert UNIT_TYPE_LABELS["player"] == "玩家"
+    assert UNIT_TYPE_LABELS["monster"] == "怪物"
+    assert UNIT_TYPE_LABELS["ally"] == "友方"
+
+
+def test_theme_has_ally_row_bg():
+    assert THEME["ally_row_bg"] == "#e3f4e6"

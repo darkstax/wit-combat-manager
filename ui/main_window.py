@@ -467,11 +467,12 @@ class MainWindow(QMainWindow):
             return False
 
     def _update_status(self):
-        p_count = sum(1 for u in self.units if u.unit_type == "player")
+        p_count = sum(1 for u in self.units if u.unit_type in ("player", "ally"))
         m_count = sum(1 for u in self.units if u.unit_type == "monster")
+        a_count = sum(1 for u in self.units if u.unit_type == "ally")
         self.status_label.setText(
             f"规则 v{self.rule_mode.value} | 玩家: {p_count} | "
-            f"怪物: {m_count} | 共 {len(self.units)} 单位"
+            f"友方: {a_count} | 怪物: {m_count} | 共 {len(self.units)} 单位"
         )
 
     def _on_rule_mode_changed(self):

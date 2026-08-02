@@ -13,6 +13,7 @@ from PySide6.QtGui import QColor, QBrush, QIntValidator
 from models import (
     Unit, CombatState, RuleMode, ALL_STATUS_NAMES,
     X_STATUSES, ELEMENT_TYPES, STATUS_DEFINITIONS, THEME,
+    UNIT_TYPE_LABELS,
     element_types_for, status_names_for, x_statuses_for,
 )
 from combat import (
@@ -69,7 +70,7 @@ class InitiativeRollDialog(QDialog):
             else:
                 edit.setValidator(QIntValidator(0, 9999, edit))
                 edit.setPlaceholderText("必填")
-            type_name = "玩家" if unit.unit_type == "player" else "怪物"
+            type_name = UNIT_TYPE_LABELS.get(unit.unit_type, unit.unit_type)
             form.addRow(f"{unit.name}  ·  {type_name}", edit)
             self._edits[unit.unit_id] = edit
         scroll.setWidget(container)
@@ -429,7 +430,7 @@ class CombatPanel(QWidget):
         if unit is None:
             self.target_context_label.setText("未选择单位")
         else:
-            unit_type = "玩家" if unit.unit_type == "player" else "怪物"
+            unit_type = UNIT_TYPE_LABELS.get(unit.unit_type, unit.unit_type)
             self.target_context_label.setText(
                 f"{unit.name} · {unit_type} · HP {unit.current_hp}/{unit.max_hp}"
             )

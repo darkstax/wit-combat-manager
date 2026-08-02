@@ -305,10 +305,14 @@ ELEMENTAL_BURST_EFFECTS = {
 # Unit 数据模型
 # ============================================================
 
+UNIT_TYPES = ("player", "monster", "ally")
+UNIT_TYPE_LABELS = {"player": "玩家", "monster": "怪物", "ally": "友方"}
+
+
 @dataclass
 class Unit:
     name: str = ""
-    unit_type: str = "player"  # "player" | "monster"
+    unit_type: str = "player"  # "player" | "monster" | "ally"
     current_hp: int = 10
     max_hp: int = 10
     initial_max_hp: int = 0
@@ -339,6 +343,8 @@ class Unit:
     pending_rolls: list[dict] = field(default_factory=list)
 
     def __post_init__(self):
+        if self.unit_type not in UNIT_TYPES:
+            self.unit_type = "player"
         if not self.unit_id:
             self.unit_id = uuid.uuid4().hex[:8]
         normalized_statuses = []
@@ -616,4 +622,5 @@ THEME = {
     "subtle_fill_hover": "rgba(0, 0, 0, 12)",
     "current_actor_bg": "#dbeeff",
     "monster_row_bg": "#fde7e9",
+    "ally_row_bg": "#e3f4e6",
 }
