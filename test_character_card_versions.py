@@ -4,6 +4,8 @@ import pytest
 from character_card import (
     detect_character_card_rule_mode,
     import_character_card_with_report,
+    import_from_quick_text,
+    ImportResult,
 )
 from models import RuleMode
 
@@ -109,3 +111,93 @@ def test_character_card_detection_rejects_unknown_sheet_signature(tmp_path):
 
     with pytest.raises(ValueError, match="无法根据工作表结构识别"):
         detect_character_card_rule_mode(str(path))
+
+
+QUICK_IMPORT_SAMPLE = """名称：干员A
+职业：先锋
+分支：冲锋手
+等级：10
+HP：35
+SP：4/12
+耐力上限：8
+护甲：轻甲"""
+
+
+def test_quick_import_parses_name_from_text_or_argument():
+    unit = import_from_quick_text("名称：干员A")
+    assert unit.name == "干员A"
+
+    unit = import_from_quick_text("名称：干员A", name="参数名")
+    assert unit.name == "参数名"
+
+    unit = import_from_quick_text("这里没有任何角色信息")
+    assert unit.name == "导入角色"
+
+
+def test_quick_import_type_keyword_position_priority():
+    # “友方”位置在“敌人”之前，位置最前者胜
+    unit = import_from_quick_text("友方单位……敌人来袭")
+    assert unit.unit_type == "ally"
+
+    unit = import_from_quick_text("敌方小怪")
+    assert unit.unit_type == "monster"
+
+    unit = import_from_quick_text("玩家角色卡")
+    assert unit.unit_type == "player"
+
+    # 无类型关键词 → 默认玩家
+    unit = import_from_quick_text("名称：干员A")
+    assert unit.unit_type == "player"
+
+
+def test_quick_import_parses_extended_fields():
+    unit = import_from_quick_text(QUICK_IMPORT_SAMPLE)
+    assert unit.name == "干员A"
+    assert unit.profession == "先锋"
+    assert unit.subprofession == "冲锋手"
+    assert unit.level == 10
+    assert unit.max_stamina == 8
+    assert unit.current_stamina == 0
+    assert unit.armor_type == "轻甲"
+    assert unit.max_hp == 35
+    assert unit.current_sp == 4
+    assert unit.max_sp == 9  # 未提供 SP上限，v1.2 默认 9
+
+
+def test_quick_import_english_aliases_hp_sp():
+    unit = import_from_quick_text("HP: 20\nSP: 3")
+    assert unit.max_hp == 20
+    assert unit.current_sp == 3
+
+    # 忽略大小写
+    unit = import_from_quick_text("hp: 22\nsp: 5")
+    assert unit.max_hp == 22
+    assert unit.current_sp == 5
+
+
+def test_quick_import_report_returns_import_result():
+    report = import_from_quick_text(QUICK_IMPORT_SAMPLE, report=True)
+    assert isinstance(report, ImportResult)
+    assert report.unit.name == "干员A"
+    assert report.detected_rule_mode is RuleMode.V1_2
+    assert report.imported_fields["max_hp"] == 35
+    assert report.imported_fields["unit_type"] == "player"
+    assert report.imported_fields["armor_type"] == "轻甲"
+    assert report.imported_fields["level"] == 10
+    assert "未识别到类型，默认为玩家" in report.warnings
+
+
+def test_quick_import_defaults_and_warnings():
+    report = import_from_quick_text("没有任何字段", report=True)
+    assert report.unit.name == "导入角色"
+    assert report.unit.max_hp == 10  # 默认值保留
+    assert report.unit.level == 1
+    assert report.unit.armor_type == "轻甲"
+    assert "未识别到角色名称" in report.warnings
+    assert "未识别到类型，默认为玩家" in report.warnings
+
+
+def test_quick_import_npc_keyword_maps_to_ally():
+    unit = import_from_quick_text("名称：商人\nNPC")
+    assert unit.unit_type == "ally"
+    assert unit.name == "商人"

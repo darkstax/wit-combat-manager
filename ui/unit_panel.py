@@ -4,9 +4,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTreeWidget,
     QTreeWidgetItem, QTextEdit, QRadioButton, QButtonGroup,
     QFileDialog, QMessageBox, QDialog, QLabel, QLineEdit,
-    QDialogButtonBox, QMenu,
+    QDialogButtonBox, QMenu, QComboBox,
 )
-from PySide6.QtCore import QPoint, Signal
+from PySide6.QtCore import QPoint, Signal, QTimer
 from PySide6.QtGui import QColor, QBrush
 from models import RuleMode, Unit, THEME
 from ui.fluent import fade_in, section_label, set_button_role
@@ -15,11 +15,14 @@ from ui.fluent import fade_in, section_label, set_button_role
 class QuickImportDialog(QDialog):
     """快速导入弹窗"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, rule_mode: RuleMode | str = RuleMode.V1_2):
         super().__init__(parent)
+        self.rule_mode = RuleMode.coerce(rule_mode)
         self.setWindowTitle("快速导入角色")
         self.setMinimumSize(560, 390)
         self.result_data = None
+        self._last_report = None
+        self._type_manually_edited = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -31,13 +34,39 @@ class QuickImportDialog(QDialog):
 
         layout.addWidget(QLabel("角色名称"))
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("未填写时使用“快速导入角色”")
+        self.name_edit.setPlaceholderText("未填写时自动从文本提取")
         layout.addWidget(self.name_edit)
+
+        layout.addWidget(QLabel("类型"))
+        self.type_combo = QComboBox()
+        self.type_combo.addItem("玩家", "player")
+        self.type_combo.addItem("怪物", "monster")
+        self.type_combo.addItem("友方", "ally")
+        self.type_combo.setCurrentIndex(0)
+        self.type_combo.currentIndexChanged.connect(self._on_type_changed)
+        layout.addWidget(self.type_combo)
 
         layout.addWidget(QLabel("骰娘导出文本"))
         self.text_edit = QTextEdit()
-        self.text_edit.setPlaceholderText("在此粘贴导出的角色数据")
+        self.text_edit.setPlaceholderText(
+            "粘贴骰娘导出文本，例如：\n"
+            "名称：干员A\n职业：先锋\n分支：冲锋手\n等级：10\n"
+            "HP：35\nSP：4/12\n耐力上限：8\n护甲：轻甲"
+        )
         layout.addWidget(self.text_edit)
+
+        layout.addWidget(QLabel("解析预览"))
+        self.preview_edit = QTextEdit()
+        self.preview_edit.setReadOnly(True)
+        self.preview_edit.setMaximumHeight(110)
+        self.preview_edit.setPlaceholderText("输入文本后自动解析预览")
+        layout.addWidget(self.preview_edit)
+
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(150)
+        self._preview_timer.timeout.connect(self._refresh_preview)
+        self.text_edit.textChanged.connect(self._preview_timer.start)
 
         buttons = QDialogButtonBox()
         import_btn = QPushButton("导入")
@@ -49,14 +78,53 @@ class QuickImportDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _on_type_changed(self, index):
+        """用户手动修改类型后，不再被自动识别覆盖"""
+        self._type_manually_edited = True
+
+    def _refresh_preview(self):
+        text = self.text_edit.toPlainText().strip()
+        if not text:
+            self.preview_edit.clear()
+            self._last_report = None
+            return
+        try:
+            from character_card import import_from_quick_text
+            report = import_from_quick_text(text, self.rule_mode, report=True)
+        except Exception as e:
+            self.preview_edit.setPlainText(f"解析失败: {e}")
+            self._last_report = None
+            return
+        self._last_report = report
+        unit = report.unit
+        if not self._type_manually_edited:
+            index = self.type_combo.findData(unit.unit_type)
+            if index >= 0:
+                self.type_combo.blockSignals(True)
+                self.type_combo.setCurrentIndex(index)
+                self.type_combo.blockSignals(False)
+        type_labels = {"player": "玩家", "monster": "怪物", "ally": "友方"}
+        lines = [
+            f"名称: {unit.name}  类型: {type_labels.get(unit.unit_type, unit.unit_type)}（自动识别）",
+            f"HP: {unit.max_hp}  SP: {unit.current_sp}/{unit.max_sp}",
+            f"职业: {unit.profession or '未识别'}  分支: {unit.subprofession or '未识别'}  等级: {unit.level}",
+            f"耐力: {unit.current_stamina}/{unit.max_stamina}  护甲: {unit.armor_type}",
+        ]
+        if report.warnings:
+            lines.append("提示: " + "；".join(report.warnings))
+        self.preview_edit.setPlainText("\n".join(lines))
+
     def _on_import(self):
         text = self.text_edit.toPlainText().strip()
         if not text:
             QMessageBox.warning(self, "提示", "请粘贴导入文本")
             return
+        self._refresh_preview()  # 确保 report 与当前文本一致（防抖可能尚未触发）
         self.result_data = {
             "text": text,
-            "name": self.name_edit.text().strip() or "快速导入角色",
+            "name": self.name_edit.text().strip(),
+            "unit_type": self.type_combo.currentData(),
+            "report": self._last_report,
         }
         self.accept()
 
@@ -347,13 +415,21 @@ class UnitPanel(QWidget):
         dlg = QuickImportDialog(self)
         if dlg.exec() != QDialog.Accepted or not dlg.result_data:
             return
+        data = dlg.result_data
         try:
             from character_card import import_from_quick_text
-            unit = import_from_quick_text(
-                dlg.result_data["text"],
-                rule_mode=self.rule_mode,
-                name=dlg.result_data["name"],
-            )
+            report = data.get("report")
+            if report is None:
+                # 向后兼容：没有 report 时自行解析
+                report = import_from_quick_text(
+                    data["text"],
+                    rule_mode=self.rule_mode,
+                    name=data.get("name", ""),
+                    report=True,
+                )
+            unit = report.unit
+            if data.get("unit_type") and data["unit_type"] != unit.unit_type:
+                unit.unit_type = data["unit_type"]
         except Exception as e:
             QMessageBox.critical(self, "导入失败", f"无法解析文本:\n{e}")
             return
@@ -361,13 +437,21 @@ class UnitPanel(QWidget):
         self.units.append(unit)
         self._refresh_tree()
         self._notify_change()
-        QMessageBox.information(
-            self, "导入成功",
+        type_labels = {"player": "玩家", "monster": "怪物", "ally": "友方"}
+        details = "\n".join([
+            f"类型: {type_labels.get(unit.unit_type, unit.unit_type)}  "
+            f"职业: {unit.profession or '未填写'}  分支: {unit.subprofession or '未填写'}  等级: {unit.level}",
+            f"耐力: {unit.current_stamina}/{unit.max_stamina}  护甲: {unit.armor_type}",
+        ])
+        message = (
             f"已导入角色: {unit.name}\n"
             f"HP: {unit.max_hp}  物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  "
             f"速度: {unit.speed}  重量: {unit.weight}\n"
-            f"(精英化等级未包含在快速导入中，默认为0)"
+            + details
+            + "\n(精英化等级未包含在快速导入中，默认为0)"
+            + (f"\n提示: {'；'.join(report.warnings)}" if report.warnings else "")
         )
+        QMessageBox.information(self, "导入成功", message)
 
     def _notify_change(self):
         self.units_changed.emit(self.units)

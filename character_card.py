@@ -312,39 +312,136 @@ QUICK_IMPORT_FIELDS = [
     ("技力上限", "max_sp"),
     ("SP", "current_sp"),
     ("技力", "current_sp"),
+    # 英文别名（顺序保持中文在前；SP 已在上面定义，此处不重复）
+    ("HP", "max_hp"),
 ]
+
+
+QUICK_NAME_LABELS = ["名称", "名字", "姓名"]
+QUICK_PROFESSION_LABELS = ["职业"]
+QUICK_SUBPROFESSION_LABELS = ["分支", "子职业"]
+QUICK_LEVEL_LABELS = ["等级"]
+QUICK_STAMINA_LABELS = ["耐力上限", "最大耐力"]
+QUICK_ARMOR_LABELS = ["护甲类型", "护甲"]
+QUICK_ARMOR_VALUES = ("轻甲", "中甲", "重甲", "无甲")
+QUICK_TYPE_KEYWORDS = (
+    ("敌人", "monster"),
+    ("怪物", "monster"),
+    ("敌", "monster"),
+    ("友方", "ally"),
+    ("友军", "ally"),
+    ("友", "ally"),
+    ("玩家", "player"),
+    ("NPC", "ally"),
+)
+
+
+def _extract_label_value(text: str, labels: list[str]) -> str:
+    """按标签列表提取字段值，取首个匹配（标签顺序优先）。"""
+    for label in labels:
+        match = re.search(rf"{re.escape(label)}\s*[:：]?\s*([^\n\r，,。;；]+)", text)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def _extract_label_number(text: str, labels: list[str], default: int) -> int:
+    """按标签列表提取数值字段，取首个匹配，无匹配返回默认值。"""
+    for label in labels:
+        match = re.search(rf"{re.escape(label)}\s*[:：]?\s*(-?\d+)", text)
+        if match:
+            return int(match.group(1))
+    return default
 
 
 def import_from_quick_text(
     text: str,
     rule_mode: RuleMode | str = RuleMode.V1_2,
     name: str = "",
-) -> Unit:
+    report: bool = False,
+) -> Unit | ImportResult:
     mode = RuleMode.coerce(rule_mode)
     extracted = {}
     for label, key in QUICK_IMPORT_FIELDS:
-        match = re.search(rf"{re.escape(label)}\s*[:：]?\s*(-?\d+)", text)
+        match = re.search(
+            rf"{re.escape(label)}\s*[:：]?\s*(-?\d+)", text, re.IGNORECASE
+        )
         if match and key not in extracted:
             extracted[key] = int(match.group(1))
+
+    warnings = []
+
+    # 名称：name 参数优先，否则从文本提取，仍空则兜底
+    provided_name = name.strip() if name else ""
+    parsed_name = provided_name or _extract_label_value(text, QUICK_NAME_LABELS)
+    final_name = parsed_name or "导入角色"
+    if not parsed_name:
+        warnings.append("未识别到角色名称")
+
+    # 类型：关键词按最早出现位置排序，位置最前者胜；无匹配默认玩家
+    unit_type = "player"
+    best_pos = -1
+    for keyword, keyword_type in QUICK_TYPE_KEYWORDS:
+        pos = text.find(keyword)
+        if pos != -1 and (best_pos == -1 or pos < best_pos):
+            best_pos = pos
+            unit_type = keyword_type
+    if best_pos == -1:
+        warnings.append("未识别到类型，默认为玩家")
+
+    profession = _extract_label_value(text, QUICK_PROFESSION_LABELS)
+    subprofession = _extract_label_value(text, QUICK_SUBPROFESSION_LABELS)
+    level = _extract_label_number(text, QUICK_LEVEL_LABELS, 1)
+    max_stamina = _extract_label_number(text, QUICK_STAMINA_LABELS, 0)
+    armor_type = next((v for v in QUICK_ARMOR_VALUES if v in text), "轻甲")
 
     max_hp = max(1, extracted.get("max_hp", 10))
     default_tenacity = 10 if mode == RuleMode.V0_3 else 6
     current_sp = max(0, extracted.get("current_sp", 0))
     max_sp = max(0, extracted.get("max_sp", current_sp if mode == RuleMode.V0_3 else 9))
-    return Unit(
-        name=name.strip() or "导入角色",
-        unit_type="player",
+    speed = extracted.get("speed", 0 if mode == RuleMode.V0_3 else 5)
+    unit = Unit(
+        name=final_name,
+        unit_type=unit_type,
         current_hp=max_hp,
         max_hp=max_hp,
         initial_max_hp=max_hp,
         physical_resist=extracted.get("physical_resist", 0),
         magic_resist=extracted.get("magic_resist", 0),
-        speed=extracted.get("speed", 0 if mode == RuleMode.V0_3 else 5),
-        reaction_mobility=extracted.get("speed", 0 if mode == RuleMode.V0_3 else 5),
+        speed=speed,
+        reaction_mobility=speed,
         weight=extracted.get("weight", 0),
         elemental_tenacity_current=extracted.get("elemental_tenacity", default_tenacity),
         elemental_tenacity_max=extracted.get("elemental_tenacity", default_tenacity),
         current_sp=min(current_sp, max_sp),
         max_sp=max_sp,
         elite_stage=0,
+        current_stamina=0,
+        max_stamina=max_stamina,
+        profession=profession,
+        subprofession=subprofession,
+        level=level,
+        armor_type=armor_type,
     )
+    if not report:
+        return unit
+
+    imported = {
+        "name": final_name,
+        "unit_type": unit_type,
+        "max_hp": max_hp,
+        "current_sp": current_sp,
+        "max_sp": max_sp,
+        "physical_resist": extracted.get("physical_resist", 0),
+        "magic_resist": extracted.get("magic_resist", 0),
+        "speed": speed,
+        "weight": extracted.get("weight", 0),
+        "elemental_tenacity": extracted.get("elemental_tenacity", default_tenacity),
+        "profession": profession,
+        "subprofession": subprofession,
+        "level": level,
+        "current_stamina": 0,
+        "max_stamina": max_stamina,
+        "armor_type": armor_type,
+    }
+    return ImportResult(unit, mode, imported, tuple(warnings))
