@@ -471,7 +471,7 @@ class MainWindow(QMainWindow):
         m_count = sum(1 for u in self.units if u.unit_type == "monster")
         a_count = sum(1 for u in self.units if u.unit_type == "ally")
         self.status_label.setText(
-            f"规则 v{self.rule_mode.value} | 玩家: {p_count} | "
+            f"规则 v{self.rule_mode.value} | 玩家队: {p_count} | "
             f"友方: {a_count} | 怪物: {m_count} | 共 {len(self.units)} 单位"
         )
 

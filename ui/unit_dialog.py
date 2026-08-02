@@ -276,7 +276,7 @@ class UnitDialog(QDialog):
         用时间窗去重保证每次按键只保存一次。
         """
         now = time.monotonic()
-        if now - self._last_return_pressed < 0.15:
+        if now - self._last_return_pressed < 0.05:
             return
         self._last_return_pressed = now
         if self.is_edit:

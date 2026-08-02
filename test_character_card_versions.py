@@ -149,6 +149,15 @@ def test_quick_import_type_keyword_position_priority():
     unit = import_from_quick_text("名称：干员A")
     assert unit.unit_type == "player"
 
+    # 单字“敌”不参与关键词匹配：名字含“敌”不误判为怪物
+    unit = import_from_quick_text("名称：无敌剑圣")
+    assert unit.unit_type == "player"
+    assert unit.name == "无敌剑圣"
+
+    # 双字“敌对”仍识别为怪物
+    unit = import_from_quick_text("敌对目标")
+    assert unit.unit_type == "monster"
+
 
 def test_quick_import_parses_extended_fields():
     unit = import_from_quick_text(QUICK_IMPORT_SAMPLE)
@@ -195,6 +204,22 @@ def test_quick_import_defaults_and_warnings():
     assert report.unit.armor_type == "轻甲"
     assert "未识别到角色名称" in report.warnings
     assert "未识别到类型，默认为玩家" in report.warnings
+
+
+def test_quick_import_same_line_label_values():
+    # 同行多字段：名称/职业提取不被后续字段污染
+    unit = import_from_quick_text("名称：干员A 职业：先锋")
+    assert unit.name == "干员A"
+    assert unit.profession == "先锋"
+
+
+def test_quick_import_max_sp_english_alias():
+    # max_sp 英文别名：忽略大小写，V0_3 下 max_sp 上限 10
+    unit = import_from_quick_text("max_SP: 20", rule_mode=RuleMode.V0_3)
+    assert unit.max_sp == 20
+
+    unit = import_from_quick_text("MAX_SP: 8", rule_mode=RuleMode.V0_3)
+    assert unit.max_sp == 8
 
 
 def test_quick_import_npc_keyword_maps_to_ally():

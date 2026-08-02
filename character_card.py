@@ -312,7 +312,8 @@ QUICK_IMPORT_FIELDS = [
     ("技力上限", "max_sp"),
     ("SP", "current_sp"),
     ("技力", "current_sp"),
-    # 英文别名（顺序保持中文在前；SP 已在上面定义，此处不重复）
+    # 英文别名（顺序保持中文在前；SP/HP 已在上面定义，此处仅补 max_sp）
+    ("max_sp", "max_sp"),
     ("HP", "max_hp"),
 ]
 
@@ -327,7 +328,8 @@ QUICK_ARMOR_VALUES = ("轻甲", "中甲", "重甲", "无甲")
 QUICK_TYPE_KEYWORDS = (
     ("敌人", "monster"),
     ("怪物", "monster"),
-    ("敌", "monster"),
+    ("敌方", "monster"),
+    ("敌对", "monster"),
     ("友方", "ally"),
     ("友军", "ally"),
     ("友", "ally"),
@@ -339,7 +341,7 @@ QUICK_TYPE_KEYWORDS = (
 def _extract_label_value(text: str, labels: list[str]) -> str:
     """按标签列表提取字段值，取首个匹配（标签顺序优先）。"""
     for label in labels:
-        match = re.search(rf"{re.escape(label)}\s*[:：]?\s*([^\n\r，,。;；]+)", text)
+        match = re.search(rf"{re.escape(label)}\s*[:：]?\s*([^\s\n\r，,。;；]+)", text)
         if match:
             return match.group(1).strip()
     return ""

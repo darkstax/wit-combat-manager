@@ -419,7 +419,7 @@ class UnitPanel(QWidget):
         )
 
     def _import_quick_text(self):
-        dlg = QuickImportDialog(self)
+        dlg = QuickImportDialog(self, self.rule_mode)
         if dlg.exec() != QDialog.Accepted or not dlg.result_data:
             return
         data = dlg.result_data
