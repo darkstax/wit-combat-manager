@@ -3,9 +3,11 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QTabWidget, QWidget
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QTabWidget, QWidget
 
+from models import Unit, RuleMode
 from ui.fluent import fade_in, install_tab_fade, motion_enabled, stop_animation
+from ui.unit_dialog import UnitDialog
 
 
 def _app():
@@ -63,3 +65,52 @@ def test_tab_fade_finishes_without_changing_layout(monkeypatch):
     assert second.graphicsEffect() is None
     assert second.isVisible()
     tabs.close()
+
+
+def test_new_mode_save_and_continue_keeps_dialog_open():
+    _app()
+    dialog = UnitDialog(Unit(), rule_mode=RuleMode.V1_2)
+    dialog.name_edit.setText("单位A")
+
+    dialog._on_save_and_continue()
+
+    assert len(dialog.saved_units) == 1
+    assert dialog.saved_units[0].name == "单位A"
+    assert dialog.name_edit.text() == ""
+    assert dialog.result is None  # 未走 accept 路径，对话框未关闭
+    assert dialog.is_edit is False
+
+
+def test_edit_mode_save_appends_to_saved_units():
+    _app()
+    unit = Unit(name="已有单位")
+    dialog = UnitDialog(unit)
+
+    dialog._on_save()
+
+    assert dialog.saved_units == [unit]
+    assert dialog.result is unit
+    assert dialog.is_edit is True
+
+
+def test_edit_mode_has_no_save_and_continue_button():
+    _app()
+    dialog = UnitDialog(Unit(name="已有单位"))
+
+    assert dialog.save_and_continue_button is None
+    assert dialog.save_button.text() == "保存"
+    assert dialog.is_edit is True
+
+
+def test_profession_combo_editable_and_collect_keeps_text():
+    _app()
+    dialog = UnitDialog(Unit())
+    assert dialog.profession_combo.isEditable()
+    assert dialog.profession_combo.insertPolicy() == QComboBox.NoInsert
+
+    dialog.profession_combo.setCurrentText("自定义职业")
+    fresh = Unit()
+    dialog._collect_unit(fresh)
+
+    assert fresh.profession == "自定义职业"
+    assert dialog.profession_combo.currentText() == "自定义职业"

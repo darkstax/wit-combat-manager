@@ -23,6 +23,8 @@ WORKBOOK_FILENAMES = {
     "v12_card": "v1.2.角色卡.Plus .xlsx",
 }
 
+BUILTIN_PROFESSIONS: tuple[str, ...] = ()
+
 _SPACE_RE = re.compile(r"\s+")
 _FORMULA_RE = re.compile(r"^=(?:DISPIMG|_xlfn\.DISPIMG)\(", re.IGNORECASE)
 _INLINE_DISPIMG_RE = re.compile(
@@ -172,6 +174,29 @@ class RuleCatalog:
         }
         return sorted(values, key=lambda value: value.casefold())
 
+    def get_profession_names(
+        self, version: RuleMode | str | None = None
+    ) -> list[str]:
+        """Distinct profession names for the version, without loading workbooks.
+
+        "职业" entries contribute their title; "职业技艺" entries contribute their
+        first keyword (the owning profession / branch sheet name). Names are
+        deduplicated by casefold and returned sorted case-insensitively.
+        """
+
+        normalized_version = RuleMode.coerce(version).value if version else None
+        by_key: dict[str, str] = {}
+        for entry in self.entries():
+            if normalized_version and entry.version != normalized_version:
+                continue
+            if entry.category == "职业":
+                if entry.title:
+                    by_key.setdefault(entry.title.casefold(), entry.title)
+            elif entry.category == "职业技艺":
+                if entry.keywords and entry.keywords[0]:
+                    by_key.setdefault(entry.keywords[0].casefold(), entry.keywords[0])
+        return [by_key[key] for key in sorted(by_key)]
+
     def search(
         self,
         query: str = "",
@@ -225,6 +250,20 @@ class RuleCatalog:
         finally:
             with self._lock:
                 self._loading = False
+
+
+_shared_catalog: RuleCatalog | None = None
+_shared_catalog_lock = RLock()
+
+
+def get_shared_catalog() -> RuleCatalog:
+    """Return the process-wide shared catalog, creating it lazily."""
+
+    global _shared_catalog
+    with _shared_catalog_lock:
+        if _shared_catalog is None:
+            _shared_catalog = RuleCatalog()
+        return _shared_catalog
 
 
 def _normalize_workbook_paths(
