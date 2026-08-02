@@ -2,9 +2,11 @@
 
 import os
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
+    QComboBox,
     QGraphicsOpacityEffect,
     QLabel,
     QPushButton,
@@ -12,7 +14,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QWidget,
 )
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 
 from models import THEME
 
@@ -352,10 +354,88 @@ def _stylesheet() -> str:
     """
 
 
+def _force_light_scheme(app: QApplication) -> None:
+    """Force the Qt light color scheme and a matching light palette.
+
+    Qt 6.8+ derives a dark palette from the Windows dark mode, while the
+    global QSS only covers explicitly styled widgets; untargeted controls
+    (plain QWidget backgrounds, QTabBar) fall back to the dark palette.
+    Pinning both the scheme and the palette keeps the whole UI light.
+    """
+
+    hints = app.styleHints()
+    if hasattr(hints, "setColorScheme"):
+        hints.setColorScheme(Qt.ColorScheme.Light)
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(THEME["window_bg"]))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(THEME["text"]))
+    palette.setColor(QPalette.ColorRole.Base, QColor(THEME["surface_alt"]))
+    palette.setColor(QPalette.ColorRole.Text, QColor(THEME["text"]))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(0, 0, 0, 8))
+    palette.setColor(QPalette.ColorRole.Button, QColor(THEME["surface_alt"]))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(THEME["text"]))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(THEME["accent"]))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(THEME["accent_text"]))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(THEME["surface"]))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(THEME["text"]))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(THEME["muted_text"]))
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.Text,
+        QColor(THEME["disabled_text"]),
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.ButtonText,
+        QColor(THEME["disabled_text"]),
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.Window,
+        QColor(THEME["disabled_bg"]),
+    )
+    app.setPalette(palette)
+
+
+class _WheelGuard(QObject):
+    """Swallow wheel events over spin boxes / combo boxes unless focused."""
+
+    def eventFilter(self, watched, event):
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        if not isinstance(watched, (QAbstractSpinBox, QComboBox)):
+            return False
+        if watched.hasFocus():
+            return False
+        if isinstance(watched, QComboBox) and watched.view().isVisible():
+            return False
+        return True
+
+
+def install_wheel_guard(app: QApplication | None = None) -> None:
+    """Install a one-time, app-wide guard against wheel mis-clicks.
+
+    Unfocused spin boxes / combo boxes change values as soon as the cursor
+    hovers them while the user scrolls a nearby log or list. The guard
+    swallows those wheel events; focused widgets (and an open combo popup)
+    keep normal wheel behavior.
+    """
+
+    app = app or QApplication.instance()
+    if app is None or getattr(app, "_wit_wheel_guard", None) is not None:
+        return
+    guard = _WheelGuard(app)
+    app.installEventFilter(guard)
+    app._wit_wheel_guard = guard
+
+
 def apply_fluent_style(app: QApplication | None = None) -> None:
     app = app or QApplication.instance()
     if app is not None:
         _ensure_cjk_font(app)
+        _force_light_scheme(app)
+        install_wheel_guard(app)
         app.setStyleSheet(_stylesheet())
 
 
