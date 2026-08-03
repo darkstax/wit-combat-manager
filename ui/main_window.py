@@ -4,10 +4,18 @@ import json
 import os
 import sys
 from PySide6.QtWidgets import (
-    QMainWindow, QSplitter, QStatusBar, QTextEdit,
+    QMainWindow, QSplitter, QStatusBar,
     QVBoxLayout, QHBoxLayout, QWidget, QLabel, QFileDialog, QSlider,
-    QDialog, QPushButton, QApplication, QFrame, QTabWidget, QStyle,
-    QScrollArea, QComboBox, QMessageBox, QToolButton, QMenu,
+    QDialog, QApplication, QFrame, QStyle,
+)
+from qfluentwidgets import (
+    ComboBox,
+    PushButton,
+    RoundMenu,
+    SmoothScrollArea,
+    TabWidget,
+    TextEdit,
+    ToolButton,
 )
 from PySide6.QtCore import QEvent, QPoint, QTimer, Qt, Signal, QObject, QUrl
 from PySide6.QtGui import QAction, QPixmap, QPainter, QFont, QDesktopServices
@@ -19,9 +27,12 @@ from ui.combat_panel import CombatPanel
 from ui.fluent import (
     animate_window_entrance,
     apply_fluent_style,
+    enable_mica,
     fade_in,
+    info_box,
     install_tab_fade,
     standard_icon,
+    warn_box,
 )
 
 BASE_DIR = str(writable_data_dir())
@@ -122,8 +133,8 @@ class WatermarkDialog(QDialog):
         layout.addWidget(QLabel("（背景图将透过半透明控件显示）"))
 
         btn_layout = QHBoxLayout()
-        save_btn = QPushButton("保存")
-        cancel_btn = QPushButton("取消")
+        save_btn = PushButton("保存")
+        cancel_btn = PushButton("取消")
         save_btn.clicked.connect(self._on_save)
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addStretch()
@@ -213,10 +224,10 @@ class MainWindow(QMainWindow):
         command_layout.setSpacing(8)
         self._title_bar_layout = command_layout
 
-        self.rule_mode_combo = QComboBox()
+        self.rule_mode_combo = ComboBox()
         self.rule_mode_combo.setToolTip("切换 0.3 / 1.2 规则与独立单位名单")
         for mode in RuleMode:
-            self.rule_mode_combo.addItem(f"v{mode.value}", mode.value)
+            self.rule_mode_combo.addItem(f"v{mode.value}", userData=mode.value)
         self.rule_mode_combo.setCurrentIndex(
             self.rule_mode_combo.findData(self.rule_mode.value)
         )
@@ -229,29 +240,35 @@ class MainWindow(QMainWindow):
         self.rule_browser_action.triggered.connect(self._open_rule_browser)
         self.addAction(self.rule_browser_action)
 
-        query_btn = QPushButton("规则查询")
+        query_btn = PushButton("规则查询")
         query_btn.setIcon(standard_icon(self, QStyle.SP_FileDialogContentsView))
         query_btn.clicked.connect(self._open_rule_browser)
         command_layout.addWidget(query_btn)
 
-        self.more_menu = QMenu(self)
+        self.more_menu = RoundMenu(title="", parent=self)
         self.more_menu.addAction(self.rule_browser_action)
         self.more_menu.addSeparator()
-        rulebook_dir_action = self.more_menu.addAction("规则书路径（Excel）...")
+        rulebook_dir_action = QAction("规则书路径（Excel）...", self)
         rulebook_dir_action.triggered.connect(self._set_rulebook_dir)
-        rulebook_pdf_action = self.more_menu.addAction("打开规则书（PDF）...")
+        self.more_menu.addAction(rulebook_dir_action)
+        rulebook_pdf_action = QAction("打开规则书（PDF）...", self)
         rulebook_pdf_action.triggered.connect(self._open_rulebook_pdf)
+        self.more_menu.addAction(rulebook_pdf_action)
         self.more_menu.addSeparator()
-        bg_action = self.more_menu.addAction("设置背景图片...")
+        bg_action = QAction("设置背景图片...", self)
         bg_action.triggered.connect(self._set_background)
-        opacity_action = self.more_menu.addAction("背景水印强度...")
+        self.more_menu.addAction(bg_action)
+        opacity_action = QAction("背景水印强度...", self)
         opacity_action.triggered.connect(self._set_watermark)
-        clear_action = self.more_menu.addAction("清除背景图片")
+        self.more_menu.addAction(opacity_action)
+        clear_action = QAction("清除背景图片", self)
         clear_action.triggered.connect(self._clear_background)
+        self.more_menu.addAction(clear_action)
         self.more_menu.addSeparator()
-        export_action = self.more_menu.addAction("导出战斗日志...")
+        export_action = QAction("导出战斗日志...", self)
         export_action.triggered.connect(self._export_log)
-        self.more_btn = QToolButton()
+        self.more_menu.addAction(export_action)
+        self.more_btn = ToolButton()
         self.more_btn.setText("更多")
         self.more_btn.setIcon(standard_icon(self, QStyle.SP_ArrowDown))
         self.more_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -286,7 +303,7 @@ class MainWindow(QMainWindow):
         self.combat_panel.set_unit_provider(self.unit_panel)
         self.unit_panel.selection_changed.connect(self.combat_panel.set_selected_target)
         self.combat_panel.setMinimumHeight(240)
-        combat_scroll = QScrollArea()
+        combat_scroll = SmoothScrollArea()
         combat_scroll.setWidgetResizable(True)
         combat_scroll.setFrameShape(QFrame.NoFrame)
         combat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -296,12 +313,11 @@ class MainWindow(QMainWindow):
 
         self.combat_panel.set_log_callback(self.append_log)
 
-        log_tabs = QTabWidget()
-        log_tabs.setDocumentMode(True)
-        self.log_text = QTextEdit()
+        log_tabs = TabWidget()
+        self.log_text = TextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setPlaceholderText("战斗记录会显示在这里")
-        self.gm_log_text = QTextEdit()
+        self.gm_log_text = TextEdit()
         self.gm_log_text.setPlaceholderText("GM 备注")
         self.gm_log_text.textChanged.connect(self._persist_logs)
         self.combat_panel.order_heading.setVisible(False)
@@ -356,6 +372,10 @@ class MainWindow(QMainWindow):
         if not getattr(self, "_entrance_animated", False):
             self._entrance_animated = True
             animate_window_entrance(self)
+        try:
+            enable_mica(self)
+        except Exception:
+            pass
         handle = self.windowHandle()
         if handle is None:
             return
@@ -438,7 +458,7 @@ class MainWindow(QMainWindow):
         self.settings["rulebook_dir"] = directory
         _save_settings(self.settings)
         if len(paths) == len(WORKBOOK_FILENAMES):
-            QMessageBox.information(
+            info_box(
                 self, "规则书路径", f"已载入全部 {len(paths)} 份规则书工作簿：\n{directory}"
             )
         else:
@@ -450,7 +470,7 @@ class MainWindow(QMainWindow):
                     for path in paths.values()
                 )
             ]
-            QMessageBox.warning(
+            warn_box(
                 self, "规则书路径",
                 "目录中未找到规则书工作簿，请在目录中放置以下文件：\n\n"
                 + "\n".join(missing),
@@ -562,7 +582,7 @@ class MainWindow(QMainWindow):
         if requested == self.rule_mode:
             return
         if self.combat_panel.combat_state and self.combat_panel.combat_state.active:
-            QMessageBox.information(self, "战斗进行中", "请先结束当前战斗，再切换规则版本。")
+            info_box(self, "战斗进行中", "请先结束当前战斗，再切换规则版本。")
             self._changing_rule_mode = True
             self.rule_mode_combo.setCurrentIndex(
                 self.rule_mode_combo.findData(self.rule_mode.value)
