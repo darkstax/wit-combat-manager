@@ -412,14 +412,16 @@ class TestInitiative:
         assert state.initiative_mode == "ranked"
         assert state.turn_order == [b.unit_id, a.unit_id, c.unit_id]
 
-    def test_ranked_initiative_ties_stable_by_unit_id(self):
-        x = _u(name="X", initiative_rank=7, unit_id="unit_x")
-        y = _u(name="Y", initiative_rank=7, unit_id="unit_y")
-        state = ranked_initiative([x, y], [])
-        # 同顺位按 unit_id 升序稳定排序（此处添加顺序即 unit_id 升序）
-        assert state.turn_order == [x.unit_id, y.unit_id]
-        state2 = ranked_initiative([y, x], [])
-        assert state2.turn_order == [x.unit_id, y.unit_id]
+    def test_ranked_initiative_ties_stable_by_input_order(self):
+        # unit_id 由 __post_init__ 随机生成，不手动指定
+        a = _u(name="A", initiative_rank=7)
+        b = _u(name="B", initiative_rank=7)
+        assert a.unit_id != b.unit_id
+        state = ranked_initiative([a, b], [])
+        # 同顺位保持输入列表（players + monsters）的添加顺序
+        assert state.turn_order == [a.unit_id, b.unit_id]
+        state2 = ranked_initiative([b, a], [])
+        assert state2.turn_order == [b.unit_id, a.unit_id]
 
     def test_ranked_initiative_zero_rank_last(self):
         high = _u(name="High", initiative_rank=9)

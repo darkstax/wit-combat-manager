@@ -75,7 +75,7 @@ def ranked_initiative(
     rule_mode: RuleMode | str = RuleMode.V0_3,
 ) -> CombatState:
     """按各单位 initiative_rank 降序生成行动顺序；
-    同顺位按 unit_id 稳定排序，顺位 0（未设置）排最后。"""
+    同顺位保持输入列表（players + monsters）的添加顺序，顺位 0（未设置）排最后。"""
     mode = RuleMode.coerce(rule_mode)
     state = CombatState(
         turn=1,
@@ -86,7 +86,7 @@ def ranked_initiative(
     units_by_id = {u.unit_id: u for u in players + monsters}
     state.turn_order = sorted(
         [u.unit_id for u in players + monsters],
-        key=lambda uid: (-units_by_id[uid].initiative_rank, uid),
+        key=lambda uid: -units_by_id[uid].initiative_rank,
     )
     return state
 
