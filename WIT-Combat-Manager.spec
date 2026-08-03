@@ -24,7 +24,9 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=['openpyxl'],
+    # qfluentwidgets._rc / qframelesswindow：qfluentwidgets 动态导入的资源与依赖，
+    # 显式声明防止 PyInstaller 静态分析遗漏（openpyxl 为规则书 Excel 解析依赖）。
+    hiddenimports=['openpyxl', 'qfluentwidgets._rc', 'qframelesswindow'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

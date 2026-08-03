@@ -10,23 +10,21 @@ from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QSplitter,
-    QTextBrowser,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from models import RuleMode, THEME
+from qfluentwidgets import ComboBox, SearchLineEdit, TextBrowser, TreeWidget, isDarkTheme
+
+from models import RuleMode
 from rule_catalog import RuleCatalog, RuleEntry
-from ui.fluent import animate_window_entrance, fade_in
+from ui.fluent import THEME, THEME_DARK, animate_window_entrance, fade_in
 
 
 class _CatalogLoader(QThread):
@@ -102,21 +100,21 @@ class RuleBrowserDialog(QDialog):
         toolbar_layout.setContentsMargins(10, 8, 10, 8)
         toolbar_layout.setSpacing(8)
 
-        self.search_edit = QLineEdit()
+        self.search_edit = SearchLineEdit()
         self.search_edit.setPlaceholderText("搜索规则、状态、职业或技艺")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.setAccessibleName("规则搜索")
         toolbar_layout.addWidget(self.search_edit, 1)
 
-        self.version_combo = QComboBox()
+        self.version_combo = ComboBox()
         self.version_combo.setAccessibleName("规则版本")
-        self.version_combo.addItem("全部版本", None)
-        self.version_combo.addItem("v0.3", RuleMode.V0_3.value)
-        self.version_combo.addItem("v1.2", RuleMode.V1_2.value)
+        self.version_combo.addItem("全部版本", userData=None)
+        self.version_combo.addItem("v0.3", userData=RuleMode.V0_3.value)
+        self.version_combo.addItem("v1.2", userData=RuleMode.V1_2.value)
         self.version_combo.setMinimumWidth(112)
         toolbar_layout.addWidget(self.version_combo)
 
-        self.category_combo = QComboBox()
+        self.category_combo = ComboBox()
         self.category_combo.setAccessibleName("规则类别")
         self.category_combo.setMinimumWidth(132)
         toolbar_layout.addWidget(self.category_combo)
@@ -132,7 +130,7 @@ class RuleBrowserDialog(QDialog):
         result_heading = QLabel("结果")
         result_heading.setObjectName("SectionTitle")
         result_layout.addWidget(result_heading)
-        self.result_tree = QTreeWidget()
+        self.result_tree = TreeWidget()
         self.result_tree.setHeaderHidden(True)
         self.result_tree.setAlternatingRowColors(True)
         self.result_tree.setUniformRowHeights(True)
@@ -157,7 +155,7 @@ class RuleBrowserDialog(QDialog):
         self.detail_meta.setObjectName("SecondaryText")
         self.detail_meta.setWordWrap(True)
         detail_layout.addWidget(self.detail_meta)
-        self.detail_text = QTextBrowser()
+        self.detail_text = TextBrowser()
         self.detail_text.setOpenExternalLinks(False)
         self.detail_text.setAccessibleName("规则详情")
         detail_layout.addWidget(self.detail_text, 1)
@@ -263,10 +261,10 @@ class RuleBrowserDialog(QDialog):
         previous = self.category_combo.currentData()
         self.category_combo.blockSignals(True)
         self.category_combo.clear()
-        self.category_combo.addItem("全部类别", None)
-        self.category_combo.addItem("战斗规则", "rules")
-        self.category_combo.addItem("职业与战技", "professions")
-        self.category_combo.addItem("源石技艺", "arts")
+        self.category_combo.addItem("全部类别", userData=None)
+        self.category_combo.addItem("战斗规则", userData="rules")
+        self.category_combo.addItem("职业与战技", userData="professions")
+        self.category_combo.addItem("源石技艺", userData="arts")
         index = self.category_combo.findData(previous)
         self.category_combo.setCurrentIndex(max(0, index))
         self.category_combo.blockSignals(False)
@@ -388,9 +386,10 @@ class RuleBrowserDialog(QDialog):
         )
         if not paragraphs:
             paragraphs = "<p>此条目没有附加说明。</p>"
+        text_color = THEME_DARK["text"] if isDarkTheme() else THEME["text"]
         self.detail_text.setHtml(f"""
             <style>
-                body {{ color: {THEME['text']}; font-family: 'Segoe UI', 'Microsoft YaHei UI';
+                body {{ color: {text_color}; font-family: 'Segoe UI', 'Microsoft YaHei UI';
                        font-size: 13px; line-height: 1.55; }}
                 p {{ margin: 0 0 9px 0; }}
             </style>
