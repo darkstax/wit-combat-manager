@@ -13,6 +13,7 @@ from qfluentwidgets import (
     PushButton,
     RoundMenu,
     SmoothScrollArea,
+    TabCloseButtonDisplayMode,
     TabWidget,
     TextEdit,
     ToolButton,
@@ -314,6 +315,7 @@ class MainWindow(QMainWindow):
         self.combat_panel.set_log_callback(self.append_log)
 
         log_tabs = TabWidget()
+        log_tabs.setCloseButtonDisplayMode(TabCloseButtonDisplayMode.NEVER)
         self.log_text = TextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setPlaceholderText("战斗记录会显示在这里")

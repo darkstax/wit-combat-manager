@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     PushButton, PrimaryPushButton, ComboBox, SpinBox, DoubleSpinBox,
     CheckBox, TabWidget, ListWidget, CardWidget, ToolButton, LineEdit,
+    TabCloseButtonDisplayMode,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QBrush, QIntValidator
@@ -217,6 +218,7 @@ class CombatPanel(QWidget):
         layout.addWidget(target_context)
 
         self.operations_tabs = TabWidget()
+        self.operations_tabs.setCloseButtonDisplayMode(TabCloseButtonDisplayMode.NEVER)
         self._ops_tabs_base_height = 164
         self.operations_tabs.setMinimumHeight(self._ops_tabs_base_height)
 
