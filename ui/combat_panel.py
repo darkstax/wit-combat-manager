@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QPushButton,
     QLabel, QListWidget, QListWidgetItem, QMessageBox, QFrame,
     QTabWidget, QStyle, QDialog, QDialogButtonBox, QFormLayout,
-    QScrollArea, QLineEdit,
+    QScrollArea, QLineEdit, QSplitter,
     QAbstractItemView, QLayout, QSizePolicy, QToolButton,
 )
 from PySide6.QtCore import Qt, QTimer
@@ -112,6 +112,8 @@ class CombatPanel(QWidget):
         self.operation_buttons: list[QPushButton] = []
         self._refreshing_order = False
         self._log_callback = print  # 默认直接 print，连接后走主窗口日志
+        self._work_splitter: QSplitter | None = None
+        self._collapsed_panel_height: int | None = None
 
         layout = QVBoxLayout(self)
         layout.setSizeConstraint(QLayout.SetMinimumSize)
@@ -421,6 +423,14 @@ class CombatPanel(QWidget):
     # 接口
     # ============================================================
 
+    def attach_splitter(self, splitter: QSplitter):
+        """关联外层垂直分栏，展开“修正”时主动重排，让下方日志区让位。
+
+        必须在面板收起（damage_modifiers 不可见）状态下调用，以记录基线高度。
+        """
+        self._work_splitter = splitter
+        self._collapsed_panel_height = self.sizeHint().height()
+
     def set_unit_provider(self, panel):
         self.unit_provider = panel
         self.set_selected_target(panel.get_selected_unit())
@@ -447,6 +457,26 @@ class CombatPanel(QWidget):
     def _set_damage_modifiers_visible(self, visible: bool):
         self.damage_modifiers.setVisible(visible)
         self.damage_modifiers_toggle.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
+        # QSplitter 不会因子 widget 的 sizeHint 变大而自动重排，必须主动 setSizes；
+        # 延后到布局重算之后执行，确保拿到的 sizeHint 是展开后的准确值。
+        QTimer.singleShot(0, self._sync_splitter_for_modifiers)
+
+    def _sync_splitter_for_modifiers(self):
+        """根据“修正”区展开/收起状态，主动调整垂直分栏分配。"""
+        if self._work_splitter is None or self._collapsed_panel_height is None:
+            return
+        total = self._work_splitter.height()
+        if total <= 0:
+            return
+        if self.damage_modifiers.isVisible():
+            need = self.sizeHint().height()
+            # 防 sizeHint 抖动：展开时至少比收起基线高出一截
+            need = max(need, self._collapsed_panel_height + 100)
+            # 给下方日志区至少留 80px 可视空间（log_tabs 的 minimumHeight 120 亦会被 QSplitter 尊重）
+            need = min(need, total - 80)
+        else:
+            need = self._collapsed_panel_height
+        self._work_splitter.setSizes([need, max(total - need, 0)])
 
     def set_log_callback(self, callback):
         """设置日志回调，替代 print 劫持 sys.stdout 的方式"""

@@ -2,8 +2,11 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QTabWidget, QWidget
+from PySide6.QtWidgets import (
+    QApplication, QComboBox, QLabel, QScrollArea, QSplitter, QTabWidget, QWidget,
+)
 
 from models import Unit, RuleMode
 from ui.combat_panel import CombatPanel
@@ -141,3 +144,43 @@ def test_damage_modifiers_expand_increases_tabs_min_height():
     assert tabs.minimumHeight() == base
 
     panel.close()
+
+
+def test_damage_modifiers_expand_resizes_splitter():
+    """展开“修正”时主动重排垂直分栏，压缩下方日志区；收起后恢复。"""
+    _app()
+    splitter = QSplitter(Qt.Vertical)
+    splitter.setChildrenCollapsible(False)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    panel = CombatPanel()
+    scroll.setWidget(panel)
+    splitter.addWidget(scroll)
+    log_tabs = QTabWidget()
+    log_tabs.setMinimumHeight(120)
+    splitter.addWidget(log_tabs)
+    splitter.resize(800, 900)
+    splitter.show()
+    panel.attach_splitter(splitter)
+    QTest.qWait(20)  # 等待布局激活，基线高度生效
+    # 收起状态主动对齐一次分栏到基线（attach 只记录基线不重排，
+    # 初始按 sizeHint 比例的分配与基线略有偏差，先对齐保证断言精确）
+    panel._sync_splitter_for_modifiers()
+    collapsed = splitter.sizes()[0]
+    # QSplitter 对 setSizes 有 ±2px 取整，不要求等于基线精确值；
+    # 展开/收起走同一调用路径，相对断言是精确的
+    assert collapsed > 0
+
+    # 展开“修正”：QTimer.singleShot(0) 触发的主动重排生效，上方变高
+    panel.damage_modifiers_toggle.setChecked(True)
+    QTest.qWait(20)
+    expanded = splitter.sizes()[0]
+    assert expanded > collapsed
+    assert splitter.sizes()[1] >= log_tabs.minimumHeight()  # 日志区不被压过 120
+
+    # 收起后恢复基线分配
+    panel.damage_modifiers_toggle.setChecked(False)
+    QTest.qWait(20)
+    assert splitter.sizes()[0] == collapsed
+
+    splitter.close()

@@ -273,6 +273,7 @@ class MainWindow(QMainWindow):
         combat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         combat_scroll.setWidget(self.combat_panel)
         work_splitter.addWidget(combat_scroll)
+        self.combat_panel.attach_splitter(work_splitter)
 
         self.combat_panel.set_log_callback(self.append_log)
 
