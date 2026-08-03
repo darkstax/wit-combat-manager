@@ -15,6 +15,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
     QLabel,
+    QSplitter,
     QTreeWidgetItem,
     QWidget,
 )
@@ -39,6 +40,7 @@ from qfluentwidgets import (
 )
 
 from models import THEME
+from ui.combat_panel import CombatPanel
 from ui.fluent import (
     danger_button,
     enable_mica,
@@ -46,6 +48,7 @@ from ui.fluent import (
     install_tab_fade,
     section_label,
 )
+from ui.main_window import MainWindow
 
 
 def _app():
@@ -193,6 +196,61 @@ def test_danger_button_matches_default_button_metrics():
     finally:
         danger.close()
         plain.close()
+
+
+def test_splitter_handle_stylesheet():
+    """回归：分栏分隔条着色（全局 QSS 删除后分界线缺失）。
+
+    用未初始化的 MainWindow 实例直接调用 _style_splitter_handles，
+    避免 offscreen 下完整构造主窗口（数据/规则目录加载）的开销。
+    """
+    _app()
+    main_splitter = QSplitter(Qt.Horizontal)
+    work_splitter = QSplitter(Qt.Vertical)
+    window = MainWindow.__new__(MainWindow)
+    window.splitter = main_splitter
+    window.work_splitter = work_splitter
+    try:
+        window._style_splitter_handles()
+        light_qss = main_splitter.styleSheet()
+        assert "QSplitter::handle" in light_qss
+        assert "#d8d8d8" in light_qss  # 亮色分隔条
+        assert work_splitter.styleSheet() == light_qss
+
+        # 幂等：重复调用（主题切换触发）样式保持一致
+        window._style_splitter_handles()
+        assert main_splitter.styleSheet() == light_qss
+
+        # 暗色主题使用暗色分隔条
+        setTheme(Theme.DARK)
+        try:
+            window._style_splitter_handles()
+            dark_qss = main_splitter.styleSheet()
+            assert "QSplitter::handle" in dark_qss
+            assert "#3a3a3a" in dark_qss
+        finally:
+            setTheme(Theme.LIGHT)
+    finally:
+        main_splitter.close()
+        work_splitter.close()
+
+
+def test_combat_panel_target_context_is_card():
+    """回归：目标栏由无样式 QFrame 改为 CardWidget，恢复卡片观感。"""
+    _app()
+    panel = CombatPanel()
+    try:
+        target_labels = [l for l in panel.findChildren(QLabel) if l.text() == "目标"]
+        assert target_labels, "CombatPanel 应包含『目标』标签"
+        container = target_labels[0].parentWidget()
+        assert isinstance(container, CardWidget)
+        assert container.objectName() != "TargetContext"  # 旧 objectName 对应 QSS 已删
+    finally:
+        panel.close()
+        # 排空 qfw 组件构造/销毁遗留的 pending 事件，避免事件队列饥饿
+        # 后续 test_ui_motion 的 30ms 动画测试（QTest.qWait(60) 硬超时）
+        for _ in range(3):
+            QApplication.processEvents()
 
 
 def test_section_label_returns_label():

@@ -2,7 +2,7 @@
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QListWidgetItem, QFrame,
+    QLabel, QListWidgetItem,
     QDialog, QFormLayout,
     QScrollArea, QSplitter,
     QAbstractItemView, QLayout, QSizePolicy,
@@ -206,8 +206,7 @@ class CombatPanel(QWidget):
 
         # ---- 战斗操作 ----
         layout.addWidget(section_label("计算操作"))
-        target_context = QFrame()
-        target_context.setObjectName("TargetContext")
+        target_context = CardWidget()
         target_layout = QHBoxLayout(target_context)
         target_layout.setContentsMargins(10, 6, 10, 6)
         target_layout.setSpacing(8)

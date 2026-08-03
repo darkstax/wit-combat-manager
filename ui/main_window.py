@@ -17,6 +17,8 @@ from qfluentwidgets import (
     TabWidget,
     TextEdit,
     ToolButton,
+    isDarkTheme,
+    qconfig,
 )
 from PySide6.QtCore import QEvent, QPoint, QTimer, Qt, Signal, QObject, QUrl
 from PySide6.QtGui import QAction, QPixmap, QPainter, QFont, QDesktopServices
@@ -284,11 +286,11 @@ class MainWindow(QMainWindow):
         body_layout.setContentsMargins(12, 0, 12, 10)
         body_layout.setSpacing(0)
 
-        splitter = QSplitter(Qt.Horizontal)
+        self.splitter = QSplitter(Qt.Horizontal)
         self.unit_panel = UnitPanel()
         self.unit_panel.set_rule_mode(self.rule_mode)
         self.unit_panel.units_changed.connect(self._on_units_changed)
-        splitter.addWidget(self.unit_panel)
+        self.splitter.addWidget(self.unit_panel)
 
         workspace = QWidget()
         workspace.setObjectName("Workspace")
@@ -296,9 +298,9 @@ class MainWindow(QMainWindow):
         workspace_layout.setContentsMargins(10, 10, 10, 10)
         workspace_layout.setSpacing(8)
 
-        work_splitter = QSplitter(Qt.Vertical)
-        work_splitter.setObjectName("WorkSplitter")
-        work_splitter.setHandleWidth(14)
+        self.work_splitter = QSplitter(Qt.Vertical)
+        self.work_splitter.setObjectName("WorkSplitter")
+        self.work_splitter.setHandleWidth(14)
         self.combat_panel = CombatPanel()
         self.combat_panel.set_rule_mode(self.rule_mode)
         self.combat_panel.set_unit_provider(self.unit_panel)
@@ -309,8 +311,8 @@ class MainWindow(QMainWindow):
         combat_scroll.setFrameShape(QFrame.NoFrame)
         combat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         combat_scroll.setWidget(self.combat_panel)
-        work_splitter.addWidget(combat_scroll)
-        self.combat_panel.attach_splitter(work_splitter)
+        self.work_splitter.addWidget(combat_scroll)
+        self.combat_panel.attach_splitter(self.work_splitter)
 
         self.combat_panel.set_log_callback(self.append_log)
 
@@ -329,19 +331,19 @@ class MainWindow(QMainWindow):
         install_tab_fade(log_tabs)
         # 防止展开“修正”时被 QSplitter 完全挤没，保证至少能看到几行日志
         log_tabs.setMinimumHeight(120)
-        work_splitter.addWidget(log_tabs)
-        work_splitter.setStretchFactor(0, 3)
-        work_splitter.setStretchFactor(1, 2)
-        work_splitter.setSizes([300, 280])
-        work_splitter.setChildrenCollapsible(False)
-        workspace_layout.addWidget(work_splitter)
+        self.work_splitter.addWidget(log_tabs)
+        self.work_splitter.setStretchFactor(0, 3)
+        self.work_splitter.setStretchFactor(1, 2)
+        self.work_splitter.setSizes([300, 280])
+        self.work_splitter.setChildrenCollapsible(False)
+        workspace_layout.addWidget(self.work_splitter)
 
-        splitter.addWidget(workspace)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([360, 800])
-        splitter.setChildrenCollapsible(False)
-        body_layout.addWidget(splitter, 1)
+        self.splitter.addWidget(workspace)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([360, 800])
+        self.splitter.setChildrenCollapsible(False)
+        body_layout.addWidget(self.splitter, 1)
         layout.addWidget(body, 1)
 
         self.status_bar = QStatusBar()
@@ -350,7 +352,24 @@ class MainWindow(QMainWindow):
         self.status_bar.addWidget(self.status_label)
 
         self._enable_transparent_widgets()
+        self._style_splitter_handles()
+        # qconfig 为全局单例：先 disconnect 再 connect，保证重复构造时只连接一次
+        try:
+            qconfig.themeChangedFinished.disconnect(self._style_splitter_handles)
+        except (TypeError, RuntimeError):
+            pass
+        qconfig.themeChangedFinished.connect(self._style_splitter_handles)
 
+    def _style_splitter_handles(self):
+        """为分栏分隔条着色，恢复全局 QSS 删除后消失的界面分界线。
+
+        幂等：每次先清空再设置，主题切换（themeChangedFinished）可安全重复触发。
+        """
+        color = "#d8d8d8" if not isDarkTheme() else "#3a3a3a"
+        qss = f"QSplitter::handle {{ background: {color}; border-radius: 2px; }}"
+        for splitter in (self.splitter, self.work_splitter):
+            splitter.setStyleSheet("")
+            splitter.setStyleSheet(qss)
 
     def _enable_transparent_widgets(self):
         """Keep viewport-backed widgets compatible with the translucent theme."""
