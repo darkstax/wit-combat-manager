@@ -38,7 +38,14 @@ from qfluentwidgets import (
     Theme,
 )
 
-from ui.fluent import enable_mica, info_box, install_tab_fade, section_label
+from models import THEME
+from ui.fluent import (
+    danger_button,
+    enable_mica,
+    info_box,
+    install_tab_fade,
+    section_label,
+)
 
 
 def _app():
@@ -168,6 +175,24 @@ def test_theme_apis_smoke():
         setTheme(Theme.LIGHT)
     finally:
         setTheme(Theme.LIGHT)  # 恢复，避免污染其他测试的全局状态
+
+
+def test_danger_button_matches_default_button_metrics():
+    """危险按钮与普通按钮尺寸一致，且常态为红底白字（非透明）。"""
+    _app()
+    danger = danger_button("删除")
+    plain = PushButton("普通")
+    try:
+        # 尺寸回归：删除 min-height/padding/border 后完全继承 qfw 默认尺寸
+        assert danger.sizeHint().height() == plain.sizeHint().height()
+        assert danger.sizeHint().width() == plain.sizeHint().width()
+        # 底色回归：亮色 QSS 必须含红底（非 transparent）
+        light_qss = danger.property("lightCustomQss") or ""
+        assert f"background: {THEME['danger']}" in light_qss
+        assert "background: transparent" not in light_qss
+    finally:
+        danger.close()
+        plain.close()
 
 
 def test_section_label_returns_label():

@@ -262,12 +262,9 @@ def standard_icon(widget: QWidget, icon: QStyle.StandardPixmap):
 
 _DANGER_LIGHT_QSS = """
 QPushButton {{
-    color: {danger};
-    background: transparent;
+    color: #ffffff;
+    background: {danger};
     border: 1px solid {danger};
-    border-radius: 6px;
-    padding: 0 11px;
-    min-height: 30px;
 }}
 QPushButton:hover {{
     color: #ffffff;
@@ -288,12 +285,9 @@ QPushButton:disabled {{
 
 _DANGER_DARK_QSS = """
 QPushButton {{
-    color: {danger};
-    background: transparent;
+    color: #ffffff;
+    background: {danger};
     border: 1px solid {danger};
-    border-radius: 6px;
-    padding: 0 11px;
-    min-height: 30px;
 }}
 QPushButton:hover {{
     color: #ffffff;
