@@ -147,7 +147,7 @@ def test_damage_modifiers_expand_increases_tabs_min_height():
 
 
 def test_damage_modifiers_expand_resizes_splitter():
-    """展开“修正”时主动重排垂直分栏，压缩下方日志区；收起后恢复。"""
+    """展开“修正”时主动重排垂直分栏，压缩下方日志区；收起后按展开前快照精确恢复。"""
     _app()
     splitter = QSplitter(Qt.Vertical)
     splitter.setChildrenCollapsible(False)
@@ -162,25 +162,32 @@ def test_damage_modifiers_expand_resizes_splitter():
     splitter.resize(800, 900)
     splitter.show()
     panel.attach_splitter(splitter)
-    QTest.qWait(20)  # 等待布局激活，基线高度生效
-    # 收起状态主动对齐一次分栏到基线（attach 只记录基线不重排，
-    # 初始按 sizeHint 比例的分配与基线略有偏差，先对齐保证断言精确）
-    panel._sync_splitter_for_modifiers()
-    collapsed = splitter.sizes()[0]
-    # QSplitter 对 setSizes 有 ±2px 取整，不要求等于基线精确值；
-    # 展开/收起走同一调用路径，相对断言是精确的
-    assert collapsed > 0
+    QApplication.processEvents()
+    QApplication.processEvents()
+    # 空 QTabWidget 的 sizeHint 极小，QSplitter 初始分配会让上方占满可用空间，
+    # 展开后无余量可让位（与真实主窗口 [419, 277] 的初始分配不符）；
+    # 故预设一个接近真实场景的初始分配，作为“展开前快照”基线。
+    splitter.setSizes([419, 477])
+    QApplication.processEvents()
+    QApplication.processEvents()
+    before = splitter.sizes()
+    assert before[0] > 0 and before[1] > 0
 
     # 展开“修正”：QTimer.singleShot(0) 触发的主动重排生效，上方变高
     panel.damage_modifiers_toggle.setChecked(True)
-    QTest.qWait(20)
-    expanded = splitter.sizes()[0]
-    assert expanded > collapsed
-    assert splitter.sizes()[1] >= log_tabs.minimumHeight()  # 日志区不被压过 120
+    QApplication.processEvents()
+    QApplication.processEvents()
+    expanded = splitter.sizes()
+    assert expanded[0] > before[0]
+    assert expanded[1] >= log_tabs.minimumHeight()  # 日志区不被压过 120
 
-    # 收起后恢复基线分配
+    # 收起后按展开前快照精确恢复（QSplitter 对 setSizes 有 ±2px 取整，逐项允许偏差）
     panel.damage_modifiers_toggle.setChecked(False)
-    QTest.qWait(20)
-    assert splitter.sizes()[0] == collapsed
+    QApplication.processEvents()
+    QApplication.processEvents()
+    restored = splitter.sizes()
+    assert len(restored) == len(before)
+    for r, b in zip(restored, before):
+        assert abs(r - b) <= 2
 
     splitter.close()
