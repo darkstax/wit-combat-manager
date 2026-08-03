@@ -6,6 +6,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QTabWidget, QWidget
 
 from models import Unit, RuleMode
+from ui.combat_panel import CombatPanel
 from ui.fluent import fade_in, install_tab_fade, motion_enabled, stop_animation
 from ui.unit_dialog import UnitDialog
 
@@ -114,3 +115,27 @@ def test_profession_combo_editable_and_collect_keeps_text():
 
     assert fresh.profession == "自定义职业"
     assert dialog.profession_combo.currentText() == "自定义职业"
+
+
+def test_damage_modifiers_expand_increases_tabs_min_height():
+    _app()
+    panel = CombatPanel()
+    panel.show()  # isVisible() 依赖父链可见，offscreen 下也需 show
+    tabs = panel.operations_tabs
+    base = tabs.minimumHeight()
+    assert base == panel._ops_tabs_base_height
+
+    # 展开“修正”：最小高度应随额外选项内容增高
+    panel.damage_modifiers_toggle.setChecked(True)
+    QTest.qWait(20)  # 等待 QTimer.singleShot(0) 在布局生效后执行
+    expanded = tabs.minimumHeight()
+    extra = panel.damage_modifiers.sizeHint().height() + 6
+    assert expanded == base + max(extra, 0)
+    assert expanded > base
+
+    # 收起后恢复原高度
+    panel.damage_modifiers_toggle.setChecked(False)
+    QTest.qWait(20)
+    assert tabs.minimumHeight() == base
+
+    panel.close()

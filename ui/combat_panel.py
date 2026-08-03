@@ -216,7 +216,8 @@ class CombatPanel(QWidget):
         self.operations_tabs.setObjectName("OperationsTabs")
         self.operations_tabs.setDocumentMode(True)
         self.operations_tabs.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        self.operations_tabs.setMinimumHeight(164)
+        self._ops_tabs_base_height = 164
+        self.operations_tabs.setMinimumHeight(self._ops_tabs_base_height)
 
         damage_tab = QWidget()
         damage_layout = QVBoxLayout(damage_tab)
@@ -447,6 +448,18 @@ class CombatPanel(QWidget):
     def _set_damage_modifiers_visible(self, visible: bool):
         self.damage_modifiers.setVisible(visible)
         self.damage_modifiers_toggle.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
+        # setVisible 后布局尚未立即重算，延迟到布局生效后再同步高度
+        QTimer.singleShot(0, self._sync_operations_tabs_height)
+
+    def _sync_operations_tabs_height(self):
+        """修正面板展开时动态抬高计算操作区最小高度，避免额外选项被挤压。"""
+        if self.damage_modifiers.isVisible():
+            extra = self.damage_modifiers.sizeHint().height() + 6
+            self.operations_tabs.setMinimumHeight(
+                self._ops_tabs_base_height + max(extra, 0)
+            )
+        else:
+            self.operations_tabs.setMinimumHeight(self._ops_tabs_base_height)
 
     def set_log_callback(self, callback):
         """设置日志回调，替代 print 劫持 sys.stdout 的方式"""
