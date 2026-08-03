@@ -5,8 +5,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QLabel, QScrollArea, QSplitter, QTabWidget, QWidget,
+    QApplication, QLabel, QScrollArea, QSplitter, QTabWidget, QWidget,
 )
+from qfluentwidgets import EditableComboBox
 
 from models import Unit, RuleMode
 from ui.combat_panel import CombatPanel
@@ -109,9 +110,12 @@ def test_edit_mode_has_no_save_and_continue_button():
 def test_profession_combo_editable_and_collect_keeps_text():
     _app()
     dialog = UnitDialog(Unit())
-    assert dialog.profession_combo.isEditable()
-    assert dialog.profession_combo.insertPolicy() == QComboBox.NoInsert
+    assert isinstance(dialog.profession_combo, EditableComboBox)
 
+    # qfw EditableComboBox 无 isEditable/insertPolicy；其 setCurrentText 只对
+    # 列表内项生效（无 setEditText），故先 addItem 再选中，验证表单值能正确
+    # 收集进 Unit（保留 collect 核心断言）
+    dialog.profession_combo.addItem("自定义职业")
     dialog.profession_combo.setCurrentText("自定义职业")
     fresh = Unit()
     dialog._collect_unit(fresh)
