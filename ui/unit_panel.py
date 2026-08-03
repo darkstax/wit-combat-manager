@@ -1,15 +1,19 @@
 """TRPG 战斗管理器 - 单位列表面板 (PySide6)"""
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTreeWidget,
-    QTreeWidgetItem, QTextEdit, QRadioButton, QButtonGroup,
-    QFileDialog, QMessageBox, QDialog, QLabel, QLineEdit,
-    QDialogButtonBox, QMenu, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QTreeWidgetItem, QButtonGroup,
+    QFileDialog, QDialog, QLabel,
 )
 from PySide6.QtCore import QPoint, Signal, QTimer
-from PySide6.QtGui import QColor, QBrush
+from PySide6.QtGui import QColor, QBrush, QAction
+from qfluentwidgets import (
+    PushButton, PrimaryPushButton, ComboBox, LineEdit, TextEdit,
+    TreeWidget, RoundMenu, RadioButton,
+)
 from models import RuleMode, Unit, THEME, UNIT_TYPE_LABELS
-from ui.fluent import fade_in, section_label, set_button_role
+from ui.fluent import (
+    fade_in, section_label, danger_button, info_box, warn_box, question_box,
+)
 
 
 class QuickImportDialog(QDialog):
@@ -33,21 +37,21 @@ class QuickImportDialog(QDialog):
         layout.addWidget(title)
 
         layout.addWidget(QLabel("角色名称"))
-        self.name_edit = QLineEdit()
+        self.name_edit = LineEdit()
         self.name_edit.setPlaceholderText("未填写时自动从文本提取")
         layout.addWidget(self.name_edit)
 
         layout.addWidget(QLabel("类型"))
-        self.type_combo = QComboBox()
-        self.type_combo.addItem("玩家", "player")
-        self.type_combo.addItem("怪物", "monster")
-        self.type_combo.addItem("友方", "ally")
+        self.type_combo = ComboBox()
+        self.type_combo.addItem("玩家", userData="player")
+        self.type_combo.addItem("怪物", userData="monster")
+        self.type_combo.addItem("友方", userData="ally")
         self.type_combo.setCurrentIndex(0)
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         layout.addWidget(self.type_combo)
 
         layout.addWidget(QLabel("骰娘导出文本"))
-        self.text_edit = QTextEdit()
+        self.text_edit = TextEdit()
         self.text_edit.setPlaceholderText(
             "粘贴骰娘导出文本，例如：\n"
             "名称：干员A\n职业：先锋\n分支：冲锋手\n等级：10\n"
@@ -56,7 +60,7 @@ class QuickImportDialog(QDialog):
         layout.addWidget(self.text_edit)
 
         layout.addWidget(QLabel("解析预览"))
-        self.preview_edit = QTextEdit()
+        self.preview_edit = TextEdit()
         self.preview_edit.setReadOnly(True)
         self.preview_edit.setMaximumHeight(110)
         self.preview_edit.setPlaceholderText("输入文本后自动解析预览")
@@ -68,15 +72,15 @@ class QuickImportDialog(QDialog):
         self._preview_timer.timeout.connect(self._refresh_preview)
         self.text_edit.textChanged.connect(self._preview_timer.start)
 
-        buttons = QDialogButtonBox()
-        import_btn = QPushButton("导入")
-        set_button_role(import_btn, "primary")
-        cancel_btn = QPushButton("取消")
-        buttons.addButton(import_btn, buttons.ActionRole)
-        buttons.addButton(cancel_btn, buttons.RejectRole)
+        buttons = QHBoxLayout()
+        import_btn = PrimaryPushButton("导入")
+        cancel_btn = PushButton("取消")
         import_btn.clicked.connect(self._on_import)
         cancel_btn.clicked.connect(self.reject)
-        layout.addWidget(buttons)
+        buttons.addStretch()
+        buttons.addWidget(import_btn)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
 
     def _on_type_changed(self, index):
         """用户手动修改类型后，不再被自动识别覆盖"""
@@ -117,7 +121,7 @@ class QuickImportDialog(QDialog):
     def _on_import(self):
         text = self.text_edit.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "提示", "请粘贴导入文本")
+            warn_box(self, "提示", "请粘贴导入文本")
             return
         self._refresh_preview()  # 确保 report 与当前文本一致（防抖可能尚未触发）
         self.result_data = {
@@ -158,7 +162,7 @@ class UnitPanel(QWidget):
         filter_layout.setSpacing(4)
         self.filter_group = QButtonGroup(self)
         for label, val in [("全部", "全部"), ("玩家", "player"), ("怪物", "monster"), ("友方", "ally")]:
-            rb = QRadioButton(label)
+            rb = RadioButton(label)
             self.filter_group.addButton(rb)
             filter_layout.addWidget(rb)
             if val == "全部":
@@ -169,7 +173,7 @@ class UnitPanel(QWidget):
             rb.toggled.connect(self._refresh_tree)
         layout.addLayout(filter_layout)
 
-        self.tree = QTreeWidget()
+        self.tree = TreeWidget()
         self.tree.setHeaderLabels(["类型", "名称", "HP", "速度", "韧性"])
         self.tree.setColumnWidth(0, 42)
         self.tree.setColumnWidth(1, 92)
@@ -185,7 +189,7 @@ class UnitPanel(QWidget):
         self.detail_heading = section_label("单位信息")
         self.detail_heading.setVisible(False)
         layout.addWidget(self.detail_heading)
-        self.detail_text = QTextEdit()
+        self.detail_text = TextEdit()
         self.detail_text.setReadOnly(True)
         self.detail_text.setMinimumHeight(104)
         self.detail_text.setMaximumHeight(148)
@@ -196,12 +200,11 @@ class UnitPanel(QWidget):
         command_bar = QHBoxLayout()
         command_bar.setSpacing(6)
 
-        self.add_btn = QPushButton("添加")
-        set_button_role(self.add_btn, "primary")
-        add_menu = QMenu(self.add_btn)
-        add_menu.addAction("添加玩家", lambda: self._add_unit("player"))
-        add_menu.addAction("添加怪物", lambda: self._add_unit("monster"))
-        add_menu.addAction("添加友方", lambda: self._add_unit("ally"))
+        self.add_btn = PrimaryPushButton("添加")
+        add_menu = RoundMenu(parent=self.add_btn)
+        add_menu.addAction(QAction("添加玩家", self.add_btn, triggered=lambda: self._add_unit("player")))
+        add_menu.addAction(QAction("添加怪物", self.add_btn, triggered=lambda: self._add_unit("monster")))
+        add_menu.addAction(QAction("添加友方", self.add_btn, triggered=lambda: self._add_unit("ally")))
         self.add_btn.clicked.connect(
             lambda: add_menu.popup(
                 self.add_btn.mapToGlobal(QPoint(0, self.add_btn.height() + 4))
@@ -209,20 +212,20 @@ class UnitPanel(QWidget):
         )
         command_bar.addWidget(self.add_btn, 1)
 
-        edit_btn = QPushButton("编辑")
+        edit_btn = PushButton("编辑")
         edit_btn.clicked.connect(self._edit_unit)
         command_bar.addWidget(edit_btn, 1)
 
-        delete_btn = QPushButton("删除")
-        set_button_role(delete_btn, "danger")
+        delete_btn = danger_button("删除")
         delete_btn.clicked.connect(self._delete_unit)
         command_bar.addWidget(delete_btn, 1)
 
-        self.import_btn = QPushButton("导入")
-        import_menu = QMenu(self.import_btn)
-        self.card_import_action = import_menu.addAction("v1.2 角色卡")
+        self.import_btn = PushButton("导入")
+        import_menu = RoundMenu(parent=self.import_btn)
+        self.card_import_action = QAction("v1.2 角色卡", self.import_btn)
         self.card_import_action.triggered.connect(self._import_card)
-        import_menu.addAction("文本导入", self._import_quick_text)
+        import_menu.addAction(self.card_import_action)
+        import_menu.addAction(QAction("文本导入", self.import_btn, triggered=self._import_quick_text))
         self.import_btn.clicked.connect(
             lambda: import_menu.popup(
                 self.import_btn.mapToGlobal(QPoint(0, self.import_btn.height() + 4))
@@ -358,7 +361,7 @@ class UnitPanel(QWidget):
     def _edit_unit(self):
         unit = self.get_selected_unit()
         if not unit:
-            QMessageBox.information(self, "提示", "请先选择一个单位")
+            info_box(self, "提示", "请先选择一个单位")
             return
         from ui.unit_dialog import UnitDialog
         dlg = UnitDialog(unit, self, self.rule_mode)
@@ -371,13 +374,9 @@ class UnitPanel(QWidget):
     def _delete_unit(self):
         unit = self.get_selected_unit()
         if not unit:
-            QMessageBox.information(self, "提示", "请先选择一个单位")
+            info_box(self, "提示", "请先选择一个单位")
             return
-        reply = QMessageBox.question(
-            self, "确认删除", f"确定要删除「{unit.name}」吗？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
+        if not question_box(self, "确认删除", f"确定要删除「{unit.name}」吗？"):
             self.units.remove(unit)
             self._refresh_tree()
             self._show_detail(None)
@@ -396,22 +395,22 @@ class UnitPanel(QWidget):
             report = import_character_card_with_report(filepath, self.rule_mode)
             unit = report.unit
         except FileNotFoundError:
-            QMessageBox.critical(self, "导入失败", f"文件不存在: {filepath}")
+            warn_box(self, "导入失败", f"文件不存在: {filepath}")
             return
         except ValueError as e:
-            QMessageBox.critical(self, "导入失败", str(e))
+            warn_box(self, "导入失败", str(e))
             return
         except Exception as e:
-            QMessageBox.critical(self, "导入失败", f"无法解析角色卡:\n{e}")
+            warn_box(self, "导入失败", f"无法解析角色卡:\n{e}")
             return
 
         if not unit.name or unit.name == "未命名角色":
-            QMessageBox.warning(self, "警告", "未能读取到角色名称，请手动编辑")
+            warn_box(self, "警告", "未能读取到角色名称，请手动编辑")
 
         self.units.append(unit)
         self._refresh_tree()
         self._notify_change()
-        QMessageBox.information(
+        info_box(
             self, "导入成功",
             f"已导入角色: {unit.name}\n"
             f"HP: {unit.max_hp}  物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  "
@@ -439,7 +438,7 @@ class UnitPanel(QWidget):
             if data.get("unit_type") and data["unit_type"] != unit.unit_type:
                 unit.unit_type = data["unit_type"]
         except Exception as e:
-            QMessageBox.critical(self, "导入失败", f"无法解析文本:\n{e}")
+            warn_box(self, "导入失败", f"无法解析文本:\n{e}")
             return
 
         self.units.append(unit)
@@ -459,7 +458,7 @@ class UnitPanel(QWidget):
             + "\n(精英化等级未包含在快速导入中，默认为0)"
             + (f"\n提示: {'；'.join(report.warnings)}" if report.warnings else "")
         )
-        QMessageBox.information(self, "导入成功", message)
+        info_box(self, "导入成功", message)
 
     def _notify_change(self):
         self.units_changed.emit(self.units)

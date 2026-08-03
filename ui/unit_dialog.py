@@ -4,10 +4,12 @@ import time
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QFormLayout, QLineEdit,
-    QComboBox, QSpinBox, QPushButton, QScrollArea, QWidget,
-    QCheckBox, QLabel, QMessageBox, QGroupBox, QGridLayout,
-    QDialogButtonBox, QAbstractSpinBox,
+    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QScrollArea, QWidget,
+    QLabel, QGroupBox, QGridLayout, QComboBox, QLineEdit, QAbstractSpinBox,
+)
+from qfluentwidgets import (
+    PushButton, PrimaryPushButton, ComboBox, EditableComboBox,
+    SpinBox, CheckBox, LineEdit,
 )
 from models import (
     Unit, RuleMode, POSITIVE_BUFFS, NEGATIVE_BUFFS,
@@ -15,7 +17,7 @@ from models import (
     ELITE_TENACITY, X_STATUSES, x_statuses_for,
 )
 from rule_catalog import get_shared_catalog
-from ui.fluent import set_button_role
+from ui.fluent import warn_box
 
 
 class UnitDialog(QDialog):
@@ -68,26 +70,24 @@ class UnitDialog(QDialog):
         basic_group = QGroupBox("基本信息")
         form = QFormLayout(basic_group)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.name_edit = QLineEdit()
+        self.name_edit = LineEdit()
         self.name_edit.setPlaceholderText("单位名称")
         form.addRow("名称", self.name_edit)
 
-        self.type_combo = QComboBox()
-        self.type_combo.addItem("玩家", "player")
-        self.type_combo.addItem("怪物", "monster")
-        self.type_combo.addItem("友方", "ally")
+        self.type_combo = ComboBox()
+        self.type_combo.addItem("玩家", userData="player")
+        self.type_combo.addItem("怪物", userData="monster")
+        self.type_combo.addItem("友方", userData="ally")
         form.addRow("类型", self.type_combo)
 
-        self.profession_combo = QComboBox()
-        self.profession_combo.setEditable(True)
-        self.profession_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.profession_combo = EditableComboBox()
         profession_names = get_shared_catalog().get_profession_names(self.rule_mode)
         if profession_names:
             self.profession_combo.addItems(profession_names)
         form.addRow("职业", self.profession_combo)
-        self.subprofession_edit = QLineEdit()
+        self.subprofession_edit = LineEdit()
         form.addRow("分支", self.subprofession_edit)
-        self.level_spin = QSpinBox()
+        self.level_spin = SpinBox()
         self.level_spin.setRange(1, 999)
         form.addRow("等级", self.level_spin)
         layout.addWidget(basic_group)
@@ -95,19 +95,19 @@ class UnitDialog(QDialog):
         hp_group = QGroupBox("生命值")
         form2 = QFormLayout(hp_group)
         form2.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.current_hp_spin = QSpinBox()
+        self.current_hp_spin = SpinBox()
         self.current_hp_spin.setRange(0, 9999)
         form2.addRow("当前血量", self.current_hp_spin)
 
-        self.max_hp_spin = QSpinBox()
+        self.max_hp_spin = SpinBox()
         self.max_hp_spin.setRange(0, 9999)
         form2.addRow("当前生命上限", self.max_hp_spin)
 
-        self.initial_max_hp_spin = QSpinBox()
+        self.initial_max_hp_spin = SpinBox()
         self.initial_max_hp_spin.setRange(1, 9999)
         form2.addRow("初始生命上限", self.initial_max_hp_spin)
 
-        self.temp_hp_spin = QSpinBox()
+        self.temp_hp_spin = SpinBox()
         self.temp_hp_spin.setRange(0, 9999)
         form2.addRow("临时HP", self.temp_hp_spin)
         layout.addWidget(hp_group)
@@ -115,34 +115,34 @@ class UnitDialog(QDialog):
         combat_group = QGroupBox("战斗属性")
         form3 = QFormLayout(combat_group)
         form3.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.speed_spin = QSpinBox()
+        self.speed_spin = SpinBox()
         self.speed_spin.setRange(0, 99)
         form3.addRow("速度", self.speed_spin)
 
-        self.init_rank_spin = QSpinBox()
+        self.init_rank_spin = SpinBox()
         self.init_rank_spin.setRange(0, 999)
         self.init_rank_spin.setValue(0)
         self.init_rank_spin.setToolTip(
             "数值大者先行动，0 表示未设置（最后行动）；\n仅「指定顺位」先攻模式使用")
         form3.addRow("先攻顺位", self.init_rank_spin)
 
-        self.reaction_mobility_spin = QSpinBox()
+        self.reaction_mobility_spin = SpinBox()
         self.reaction_mobility_spin.setRange(0, 999)
         form3.addRow("反应机动", self.reaction_mobility_spin)
 
-        self.weight_spin = QSpinBox()
+        self.weight_spin = SpinBox()
         self.weight_spin.setRange(-99, 99)
         form3.addRow("重量", self.weight_spin)
 
-        self.phys_res_spin = QSpinBox()
+        self.phys_res_spin = SpinBox()
         self.phys_res_spin.setRange(-99, 99)
         form3.addRow("物理抗性", self.phys_res_spin)
 
-        self.magic_res_spin = QSpinBox()
+        self.magic_res_spin = SpinBox()
         self.magic_res_spin.setRange(-99, 99)
         form3.addRow("法术抗性", self.magic_res_spin)
 
-        self.armor_combo = QComboBox()
+        self.armor_combo = ComboBox()
         self.armor_combo.addItems(["轻甲", "中甲", "重甲", "无甲"])
         form3.addRow("护甲类型", self.armor_combo)
         layout.addWidget(combat_group)
@@ -150,22 +150,22 @@ class UnitDialog(QDialog):
         resource_group = QGroupBox("行动资源")
         resource_form = QFormLayout(resource_group)
         resource_form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.current_sp_spin = QSpinBox()
+        self.current_sp_spin = SpinBox()
         self.current_sp_spin.setRange(0, 999)
         resource_form.addRow("当前 SP", self.current_sp_spin)
-        self.max_sp_spin = QSpinBox()
+        self.max_sp_spin = SpinBox()
         self.max_sp_spin.setRange(0, 999)
         resource_form.addRow("SP 上限", self.max_sp_spin)
-        self.current_stamina_spin = QSpinBox()
+        self.current_stamina_spin = SpinBox()
         self.current_stamina_spin.setRange(0, 999)
         resource_form.addRow("当前耐力", self.current_stamina_spin)
-        self.max_stamina_spin = QSpinBox()
+        self.max_stamina_spin = SpinBox()
         self.max_stamina_spin.setRange(0, 999)
         resource_form.addRow("耐力上限", self.max_stamina_spin)
-        self.effect_die_edit = QLineEdit()
+        self.effect_die_edit = LineEdit()
         self.effect_die_edit.setPlaceholderText("例如 D+ 或 2d6")
         resource_form.addRow("效能骰", self.effect_die_edit)
-        self.auxiliary_die_edit = QLineEdit()
+        self.auxiliary_die_edit = LineEdit()
         self.auxiliary_die_edit.setPlaceholderText("例如 D2 或 d8")
         resource_form.addRow("辅助骰", self.auxiliary_die_edit)
         layout.addWidget(resource_group)
@@ -173,29 +173,29 @@ class UnitDialog(QDialog):
         for line_edit in (self.name_edit, self.subprofession_edit,
                           self.effect_die_edit, self.auxiliary_die_edit):
             line_edit.returnPressed.connect(self._on_return_pressed)
-        self.profession_combo.lineEdit().returnPressed.connect(self._on_return_pressed)
+        self.profession_combo.returnPressed.connect(self._on_return_pressed)
 
         element_group = QGroupBox("元素韧性")
         form4 = QFormLayout(element_group)
         form4.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        self.elite_combo = QComboBox()
-        self.elite_combo.addItem("精零", 0)
-        self.elite_combo.addItem("精一", 1)
-        self.elite_combo.addItem("精二", 2)
+        self.elite_combo = ComboBox()
+        self.elite_combo.addItem("精零", userData=0)
+        self.elite_combo.addItem("精一", userData=1)
+        self.elite_combo.addItem("精二", userData=2)
         self.elite_combo.currentIndexChanged.connect(self._on_elite_changed)
         self.elite_label = QLabel("精英化阶段")
         form4.addRow(self.elite_label, self.elite_combo)
 
-        self.tenacity_cur_spin = QSpinBox()
+        self.tenacity_cur_spin = SpinBox()
         self.tenacity_cur_spin.setRange(0, 99)
         form4.addRow("元素韧性(当前)", self.tenacity_cur_spin)
 
-        self.tenacity_max_spin = QSpinBox()
+        self.tenacity_max_spin = SpinBox()
         self.tenacity_max_spin.setRange(0, 99)
         form4.addRow("元素韧性(上限)", self.tenacity_max_spin)
         layout.addWidget(element_group)
 
-        self.buff_toggle = QPushButton("展开状态与 BUFF")
+        self.buff_toggle = PushButton("展开状态与 BUFF")
         self.buff_toggle.setCheckable(True)
         self.buff_toggle.toggled.connect(self._toggle_buffs)
         layout.addWidget(self.buff_toggle)
@@ -207,9 +207,9 @@ class UnitDialog(QDialog):
         buff_layout.addWidget(QLabel("正面BUFF"))
         pos_grid = QGridLayout()
         pos_grid.setHorizontalSpacing(12)
-        self.positive_vars: dict[str, QCheckBox] = {}
+        self.positive_vars: dict[str, CheckBox] = {}
         for index, s in enumerate(self.positive_statuses):
-            cb = QCheckBox(s)
+            cb = CheckBox(s)
             self.positive_vars[s] = cb
             pos_grid.addWidget(cb, index // 3, index % 3)
         buff_layout.addLayout(pos_grid)
@@ -217,9 +217,9 @@ class UnitDialog(QDialog):
         buff_layout.addWidget(QLabel("负面BUFF / 状态"))
         neg_grid = QGridLayout()
         neg_grid.setHorizontalSpacing(12)
-        self.negative_vars: dict[str, QCheckBox] = {}
+        self.negative_vars: dict[str, CheckBox] = {}
         for index, s in enumerate(self.negative_statuses):
-            cb = QCheckBox(s)
+            cb = CheckBox(s)
             self.negative_vars[s] = cb
             neg_grid.addWidget(cb, index // 3, index % 3)
         buff_layout.addLayout(neg_grid)
@@ -232,27 +232,27 @@ class UnitDialog(QDialog):
         self.elite_label.setVisible(not is_v03)
         self.elite_combo.setVisible(not is_v03)
 
-        buttons = QDialogButtonBox()
-        self.save_button = QPushButton("保存并关闭" if not self.is_edit else "保存")
-        set_button_role(self.save_button, "primary")
+        buttons = QHBoxLayout()
+        self.save_button = PrimaryPushButton("保存并关闭" if not self.is_edit else "保存")
         self.save_button.clicked.connect(self._on_save)
-        self.save_and_continue_button: QPushButton | None = None
-        buttons.addButton(self.save_button, QDialogButtonBox.AcceptRole)
+        self.save_and_continue_button: PushButton | None = None
         if not self.is_edit:
-            self.save_and_continue_button = QPushButton("保存并继续")
-            set_button_role(self.save_and_continue_button, "primary")
+            self.save_and_continue_button = PrimaryPushButton("保存并继续")
             self.save_and_continue_button.clicked.connect(self._on_save_and_continue)
-            buttons.addButton(self.save_and_continue_button, QDialogButtonBox.ActionRole)
-        cancel_btn = QPushButton("取消")
+        cancel_btn = PushButton("取消")
         cancel_btn.clicked.connect(self.reject)
-        buttons.addButton(cancel_btn, QDialogButtonBox.RejectRole)
-        outer.addWidget(buttons)
+        buttons.addStretch()
+        buttons.addWidget(self.save_button)
+        if self.save_and_continue_button is not None:
+            buttons.addWidget(self.save_and_continue_button)
+        buttons.addWidget(cancel_btn)
+        outer.addLayout(buttons)
 
         self._load_unit_data()
 
     def showEvent(self, event):
-        """QDialogButtonBox 显示时会把 AcceptRole 设为默认按钮，
-        新建模式下需在显示后把"保存并继续"抢回默认按钮（回车触发）。"""
+        """原生对话框默认按钮语义不再由 QDialogButtonBox 管理，
+        新建模式下在显示后把"保存并继续"设为默认按钮（回车触发）。"""
         super().showEvent(event)
         if self.save_and_continue_button is not None:
             self.save_and_continue_button.setDefault(True)
@@ -410,7 +410,7 @@ class UnitDialog(QDialog):
     def _on_save(self):
         error = self._validate()
         if error:
-            QMessageBox.warning(self, "验证失败", error)
+            warn_box(self, "验证失败", error)
             return
         self._collect_unit(self.unit)
         self.saved_units.append(self.unit)
@@ -421,7 +421,7 @@ class UnitDialog(QDialog):
         """新建模式：保存当前表单并清空继续添加，对话框不关闭。"""
         error = self._validate()
         if error:
-            QMessageBox.warning(self, "验证失败", error)
+            warn_box(self, "验证失败", error)
             return
         fresh = Unit(unit_type=self.type_combo.currentData())
         self.saved_units.append(self._collect_unit(fresh))
