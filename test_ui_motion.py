@@ -120,22 +120,24 @@ def test_profession_combo_editable_and_collect_keeps_text():
 def test_damage_modifiers_expand_increases_tabs_min_height():
     _app()
     panel = CombatPanel()
-    panel.show()  # isVisible() 依赖父链可见，offscreen 下也需 show
+    panel.show()  # sizeHint 计算依赖布局激活，offscreen 下也需 show
     tabs = panel.operations_tabs
     base = tabs.minimumHeight()
     assert base == panel._ops_tabs_base_height
 
-    # 展开“修正”：最小高度应随额外选项内容增高
+    # 展开“修正”：内容变多 → sizeHint 自然变大 → QSplitter 据此分配空间
+    base_hint = tabs.sizeHint().height()
     panel.damage_modifiers_toggle.setChecked(True)
-    QTest.qWait(20)  # 等待 QTimer.singleShot(0) 在布局生效后执行
-    expanded = tabs.minimumHeight()
-    extra = panel.damage_modifiers.sizeHint().height() + 6
-    assert expanded == base + max(extra, 0)
-    assert expanded > base
+    QTest.qWait(20)  # 等待布局生效
+    expanded_hint = tabs.sizeHint().height()
+    assert expanded_hint > base_hint
+    # 最小高度基线保持不变（不再动态抬高）
+    assert tabs.minimumHeight() == base
 
-    # 收起后恢复原高度
+    # 收起后 sizeHint 恢复
     panel.damage_modifiers_toggle.setChecked(False)
     QTest.qWait(20)
+    assert tabs.sizeHint().height() == base_hint
     assert tabs.minimumHeight() == base
 
     panel.close()

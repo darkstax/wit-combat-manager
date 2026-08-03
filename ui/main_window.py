@@ -289,6 +289,8 @@ class MainWindow(QMainWindow):
         log_tabs.addTab(self.log_text, "战斗日志")
         log_tabs.addTab(self.gm_log_text, "GM 日志")
         install_tab_fade(log_tabs)
+        # 防止展开“修正”时被 QSplitter 完全挤没，保证至少能看到几行日志
+        log_tabs.setMinimumHeight(120)
         work_splitter.addWidget(log_tabs)
         work_splitter.setStretchFactor(0, 3)
         work_splitter.setStretchFactor(1, 2)
