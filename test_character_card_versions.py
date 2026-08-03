@@ -222,6 +222,25 @@ def test_quick_import_max_sp_english_alias():
     assert unit.max_sp == 8
 
 
+def test_quick_import_word_boundary_prevents_collateral_match():
+    # 英文标签词边界保护："max_SP"/"MAX_SP" 中的 "SP" 子串不得被 "SP" 标签连带命中
+    unit = import_from_quick_text("max_SP: 20", rule_mode=RuleMode.V0_3)
+    assert unit.max_sp == 20
+    assert unit.current_sp == 0  # 不被连带填充
+
+    unit = import_from_quick_text("MAX_SP: 20", rule_mode=RuleMode.V0_3)
+    assert unit.max_sp == 20
+    assert unit.current_sp == 0
+
+    # "SP: 12" 单独粘贴仍正常提取 current_sp
+    unit = import_from_quick_text("SP: 12", rule_mode=RuleMode.V0_3)
+    assert unit.current_sp == 12
+
+    # "HP" 不被 "MAXHP" 中的子串连带命中，仍取真正的 "HP: 20"
+    unit = import_from_quick_text("MAXHP: 50\nHP: 20")
+    assert unit.max_hp == 20
+
+
 def test_quick_import_npc_keyword_maps_to_ally():
     unit = import_from_quick_text("名称：商人\nNPC")
     assert unit.unit_type == "ally"

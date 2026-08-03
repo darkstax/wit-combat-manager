@@ -365,9 +365,16 @@ def import_from_quick_text(
     mode = RuleMode.coerce(rule_mode)
     extracted = {}
     for label, key in QUICK_IMPORT_FIELDS:
-        match = re.search(
-            rf"{re.escape(label)}\s*[:：]?\s*(-?\d+)", text, re.IGNORECASE
-        )
+        if label.isascii():
+            # 纯 ASCII 英文标签加词边界（_ 与字母数字同为单词字符），
+            # 防止子串连带匹配，如 "max_SP" 中的 "SP" 被 "SP" 标签命中
+            pattern = (
+                rf"(?<![A-Za-z0-9_]){re.escape(label)}(?![A-Za-z0-9_])"
+                rf"\s*[:：]?\s*(-?\d+)"
+            )
+        else:
+            pattern = rf"{re.escape(label)}\s*[:：]?\s*(-?\d+)"
+        match = re.search(pattern, text, re.IGNORECASE)
         if match and key not in extracted:
             extracted[key] = int(match.group(1))
 
