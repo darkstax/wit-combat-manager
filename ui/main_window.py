@@ -318,6 +318,7 @@ class MainWindow(QMainWindow):
 
         log_tabs = TabWidget()
         log_tabs.setCloseButtonDisplayMode(TabCloseButtonDisplayMode.NEVER)
+        log_tabs.tabBar.setAddButtonVisible(False)
         self.log_text = TextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setPlaceholderText("战斗记录会显示在这里")
@@ -365,7 +366,7 @@ class MainWindow(QMainWindow):
 
         幂等：每次先清空再设置，主题切换（themeChangedFinished）可安全重复触发。
         """
-        color = "#d8d8d8" if not isDarkTheme() else "#3a3a3a"
+        color = "#c8c8c8" if not isDarkTheme() else "#404040"
         qss = f"QSplitter::handle {{ background: {color}; border-radius: 2px; }}"
         for splitter in (self.splitter, self.work_splitter):
             splitter.setStyleSheet("")

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 )
 from qfluentwidgets import EditableComboBox
 
-from models import Unit, RuleMode
+from models import Unit, RuleMode, CombatState
 from ui.combat_panel import CombatPanel
 from ui.fluent import fade_in, install_tab_fade, motion_enabled, stop_animation
 from ui.unit_dialog import UnitDialog
@@ -195,3 +195,28 @@ def test_damage_modifiers_expand_resizes_splitter():
         assert abs(r - b) <= 2
 
     splitter.close()
+
+
+def test_order_list_empty_state_placeholder_is_readonly():
+    """行动顺序为空时显示只读占位提示（不可选中/拖拽/编辑）。"""
+    _app()
+    panel = CombatPanel()
+    try:
+        # 未开始战斗（combat_state 为 None）：显示提示且无任何交互 flags
+        panel._refresh_order_list()
+        assert panel.order_list.count() == 1
+        item = panel.order_list.item(0)
+        assert "开始战斗" in item.text()
+        assert item.flags() == Qt.NoItemFlags
+
+        # combat_state 存在但 turn_order 为空：同样显示只读占位提示
+        panel.combat_state = CombatState()
+        panel._refresh_order_list()
+        assert panel.order_list.count() == 1
+        item = panel.order_list.item(0)
+        assert "开始战斗" in item.text()
+        assert item.flags() == Qt.NoItemFlags
+    finally:
+        panel.close()
+        for _ in range(3):
+            QApplication.processEvents()

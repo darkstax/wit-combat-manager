@@ -218,6 +218,7 @@ class CombatPanel(QWidget):
 
         self.operations_tabs = TabWidget()
         self.operations_tabs.setCloseButtonDisplayMode(TabCloseButtonDisplayMode.NEVER)
+        self.operations_tabs.tabBar.setAddButtonVisible(False)
         self._ops_tabs_base_height = 164
         self.operations_tabs.setMinimumHeight(self._ops_tabs_base_height)
 
@@ -845,8 +846,13 @@ class CombatPanel(QWidget):
     def _refresh_order_list(self):
         self._refreshing_order = True
         self.order_list.clear()
-        if not self.combat_state:
-            placeholder = QListWidgetItem("暂无行动顺序。添加单位后开始战斗。")
+        if not self.combat_state or not self.combat_state.turn_order:
+            if self.combat_state:
+                text = "未开始战斗——点击『开始战斗』后显示行动顺序"
+            else:
+                text = "暂无行动顺序。添加单位后开始战斗。"
+            placeholder = QListWidgetItem(text)
+            # 只读提示：禁止选中/拖拽/编辑/作为拖放目标
             placeholder.setFlags(Qt.NoItemFlags)
             self.order_list.addItem(placeholder)
             self._refreshing_order = False

@@ -214,7 +214,7 @@ def test_splitter_handle_stylesheet():
         window._style_splitter_handles()
         light_qss = main_splitter.styleSheet()
         assert "QSplitter::handle" in light_qss
-        assert "#d8d8d8" in light_qss  # 亮色分隔条
+        assert "#c8c8c8" in light_qss  # 亮色分隔条
         assert work_splitter.styleSheet() == light_qss
 
         # 幂等：重复调用（主题切换触发）样式保持一致
@@ -227,7 +227,7 @@ def test_splitter_handle_stylesheet():
             window._style_splitter_handles()
             dark_qss = main_splitter.styleSheet()
             assert "QSplitter::handle" in dark_qss
-            assert "#3a3a3a" in dark_qss
+            assert "#404040" in dark_qss
         finally:
             setTheme(Theme.LIGHT)
     finally:
