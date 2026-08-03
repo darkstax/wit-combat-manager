@@ -1,6 +1,19 @@
-"""Shared Fluent-inspired styling helpers for the PySide6 interface."""
+"""Shared Fluent styling helpers for the PySide6 interface.
+
+该模块负责两件事：
+1. qfluentwidgets 主题系统初始化（apply_fluent_style / _init_qfw）；
+2. 提供与旧自研 QSS 体系兼容的公共 helper（section_label、danger_button、
+   info_box / warn_box / question_box、动画、滚轮保护等）。
+
+全局 QSS 已随 _stylesheet() 的删除而移除；控件观感改由 qfluentwidgets
+主题（含 Theme.AUTO 跟随系统）与 setCustomStyleSheet 局部样式承担。
+"""
 
 import os
+import platform
+import re
+import sys
+import warnings
 
 from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt
 from PySide6.QtWidgets import (
@@ -8,394 +21,127 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QGraphicsOpacityEffect,
-    QLabel,
     QPushButton,
     QStyle,
     QTabWidget,
     QWidget,
 )
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
+from qfluentwidgets import (
+    BodyLabel,
+    MessageBox,
+    PushButton,
+    StrongBodyLabel,
+    Theme,
+    isDarkTheme,
+    qconfig,
+    setCustomStyleSheet,
+    setTheme,
+    setThemeColor,
+)
+from qfluentwidgets.components.widgets.combo_box import ComboBoxBase
 
+from app_paths import writable_data_dir
 from models import THEME
 
 
-PALETTE = {
-    "app_bg": THEME["window_bg"],
-    "surface": THEME["surface_translucent"],
-    "surface_alt": THEME["surface_alt_translucent"],
-    "surface_hover": THEME["surface_hover"],
-    "text": THEME["text"],
-    "text_secondary": THEME["muted_text"],
-    "border": THEME["border"],
-    "border_strong": THEME["border_strong"],
-    "accent": THEME["accent"],
-    "accent_hover": THEME["accent_hover"],
-    "accent_pressed": THEME["accent_pressed"],
-    "accent_text": THEME["accent_text"],
-    "danger": THEME["danger"],
-    "danger_hover": THEME["danger_hover"],
-    "disabled_bg": THEME["disabled_bg"],
-    "disabled_text": THEME["disabled_text"],
-    "hover_border": THEME["hover_border"],
-    "pressed_bg": THEME["pressed_bg"],
-    "scrollbar": THEME["scrollbar"],
-    "subtle_fill": THEME["subtle_fill"],
-    "subtle_fill_hover": THEME["subtle_fill_hover"],
-    "selection": THEME["current_actor_bg"],
-    "monster": THEME["monster_row_bg"],
+# 暗色主题 palette（与亮色 THEME 同构派生；仅用于 _apply_palette_for_theme）
+THEME_DARK = {
+    "window_bg": "#1f1f1f",
+    "surface": "#2b2b2b",
+    "surface_alt": "#262626",
+    "surface_translucent": "rgba(43, 43, 43, 232)",
+    "surface_alt_translucent": "rgba(38, 38, 38, 224)",
+    "surface_hover": "rgba(50, 50, 50, 244)",
+    "border": "#3c3c3c",
+    "border_strong": "#555555",
+    "hover_border": "#7a7a7a",
+    "text": "#e0e0e0",
+    "muted_text": "#9d9d9d",
+    "accent": "#4cc2ff",
+    "accent_hover": "#6ecfff",
+    "accent_pressed": "#3aa0e0",
+    "accent_text": "#1f1f1f",
+    "danger": "#e5484d",
+    "danger_hover": "#f2555a",
+    "success": "#46a758",
+    "disabled_bg": "#333333",
+    "disabled_text": "#7a7a7a",
+    "pressed_bg": "#343434",
+    "scrollbar": "#5a5a5a",
+    "subtle_fill": "rgba(255, 255, 255, 8)",
+    "subtle_fill_hover": "rgba(255, 255, 255, 12)",
+    "current_actor_bg": "#2a4a68",
+    "monster_row_bg": "#4a2c2a",
+    "ally_row_bg": "#2a4632",
 }
 
 
-def _stylesheet() -> str:
-    p = PALETTE
-    return f"""
-    QWidget {{
-        color: {p['text']};
-        font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-        font-size: 13px;
-    }}
-    QMainWindow, QDialog, QWidget#AppSurface {{
-        background: {p['app_bg']};
-    }}
-    QWidget#AppContent {{
-        background: transparent;
-    }}
-    QFrame#CommandBar, QFrame#BattleCommandBar,
-    QFrame#StatusPanel, QFrame#LogPanel, QFrame#TargetContext {{
-        background: {p['surface']};
-        border: 1px solid {p['border']};
-        border-radius: 8px;
-    }}
-    QWidget#NavigationPane {{
-        background: {p['surface']};
-        border: 0;
-        border-right: 1px solid {p['border']};
-        border-radius: 0;
-    }}
-    QWidget#Workspace {{
-        background: transparent;
-        border: 0;
-    }}
-    QFrame#IntegratedTitleBar {{
-        background: {p['surface']};
-        border: 0;
-        border-bottom: 1px solid {p['border']};
-        border-radius: 0;
-    }}
-    QLabel#TitleBarTitle {{
-        font-size: 16px;
-        font-weight: 600;
-    }}
-    QLabel#AppTitle {{
-        font-size: 19px;
-        font-weight: 600;
-    }}
-    QLabel#PageTitle {{
-        font-size: 18px;
-        font-weight: 600;
-    }}
-    QLabel#SectionTitle {{
-        font-size: 14px;
-        font-weight: 600;
-    }}
-    QLabel#SecondaryText {{
-        color: {p['text_secondary']};
-    }}
-    QLabel#StatusBadge {{
-        background: {p['surface_alt']};
-        border: 1px solid {p['border']};
-        border-radius: 6px;
-        padding: 5px 9px;
-        font-weight: 600;
-    }}
-    QGroupBox {{
-        background: {p['surface']};
-        border: 1px solid {p['border']};
-        border-radius: 8px;
-        margin-top: 11px;
-        padding: 12px 10px 10px 10px;
-        font-weight: 600;
-    }}
-    QGroupBox::title {{
-        subcontrol-origin: margin;
-        left: 10px;
-        padding: 0 4px;
-        color: {p['text']};
-        background: {p['surface']};
-    }}
-    QPushButton, QToolButton {{
-        min-height: 30px;
-        padding: 0 11px;
-        background: {p['surface_alt']};
-        border: 1px solid {p['border_strong']};
-        border-radius: 6px;
-    }}
-    QPushButton:hover, QToolButton:hover {{
-        background: {p['surface_hover']};
-        border-color: {p['hover_border']};
-    }}
-    QPushButton:pressed, QToolButton:pressed {{
-        background: {p['pressed_bg']};
-    }}
-    QPushButton:focus, QToolButton:focus {{
-        border: 2px solid {p['accent']};
-    }}
-    QPushButton:disabled, QToolButton:disabled {{
-        color: {p['disabled_text']};
-        background: {p['disabled_bg']};
-        border-color: {p['border']};
-    }}
-    QPushButton[role="primary"] {{
-        color: {p['accent_text']};
-        background: {p['accent']};
-        border-color: {p['accent']};
-        font-weight: 600;
-    }}
-    QPushButton[role="primary"]:hover {{
-        background: {p['accent_hover']};
-        border-color: {p['accent_hover']};
-    }}
-    QPushButton[role="primary"]:pressed {{
-        background: {p['accent_pressed']};
-    }}
-    QPushButton[role="danger"] {{
-        color: {p['danger']};
-    }}
-    QPushButton[role="danger"]:hover {{
-        color: {p['accent_text']};
-        background: {p['danger_hover']};
-        border-color: {p['danger_hover']};
-    }}
-    QPushButton[role="primary"]:disabled,
-    QPushButton[role="danger"]:disabled {{
-        color: {p['disabled_text']};
-        background: {p['disabled_bg']};
-        border-color: {p['border']};
-    }}
-    QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox,
-    QComboBox, QListWidget, QTreeWidget {{
-        background: {p['surface_alt']};
-        border: 1px solid {p['border_strong']};
-        border-radius: 6px;
-        selection-background-color: {p['selection']};
-        selection-color: {p['text']};
-    }}
-    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-        min-height: 30px;
-        padding: 0 7px;
-    }}
-    QTabWidget#OperationsTabs QPushButton,
-    QTabWidget#OperationsTabs QSpinBox,
-    QTabWidget#OperationsTabs QDoubleSpinBox,
-    QTabWidget#OperationsTabs QComboBox {{
-        min-height: 32px;
-    }}
-    QTextEdit, QPlainTextEdit, QListWidget, QTreeWidget {{
-        padding: 4px;
-    }}
-    QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover, QSpinBox:hover,
-    QDoubleSpinBox:hover, QComboBox:hover, QListWidget:hover, QTreeWidget:hover {{
-        border-color: {p['hover_border']};
-    }}
-    QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QSpinBox:focus,
-    QDoubleSpinBox:focus, QComboBox:focus, QListWidget:focus, QTreeWidget:focus {{
-        border: 2px solid {p['accent']};
-    }}
-    QLineEdit:disabled, QTextEdit:disabled, QSpinBox:disabled,
-    QComboBox:disabled, QListWidget:disabled, QTreeWidget:disabled {{
-        color: {p['disabled_text']};
-        background: {p['disabled_bg']};
-        border-color: {p['border']};
-    }}
-    QComboBox::drop-down, QSpinBox::up-button, QSpinBox::down-button {{
-        border: 0;
-        width: 22px;
-    }}
-    QTreeWidget, QListWidget {{
-        alternate-background-color: {p['subtle_fill']};
-        outline: 0;
-    }}
-    QTreeWidget::item, QListWidget::item {{
-        min-height: 28px;
-        border-radius: 3px;
-        padding: 2px 4px;
-    }}
-    QTreeWidget::item:hover, QListWidget::item:hover {{
-        background: {p['subtle_fill_hover']};
-    }}
-    QTreeWidget::item:selected, QListWidget::item:selected {{
-        background: {p['selection']};
-        color: {p['text']};
-    }}
-    QHeaderView::section {{
-        min-height: 29px;
-        padding: 0 6px;
-        background: {p['surface_alt']};
-        border: 0;
-        border-bottom: 1px solid {p['border']};
-        color: {p['text_secondary']};
-        font-weight: 600;
-    }}
-    QRadioButton {{
-        min-height: 28px;
-        padding: 0 10px;
-        background: {p['surface_alt']};
-        border: 1px solid {p['border']};
-        border-radius: 6px;
-    }}
-    QRadioButton:hover {{
-        background: {p['surface_hover']};
-    }}
-    QRadioButton:checked {{
-        color: {p['accent_text']};
-        background: {p['accent']};
-        border-color: {p['accent']};
-    }}
-    QRadioButton::indicator {{
-        width: 0;
-        height: 0;
-    }}
-    QCheckBox {{
-        min-height: 26px;
-        spacing: 7px;
-        padding-left: 2px;
-    }}
-    QTabWidget::pane {{
-        background: {p['surface']};
-        border: 1px solid {p['border']};
-        border-radius: 8px;
-        top: -1px;
-    }}
-    QTabWidget#OperationsTabs::pane {{
-        background: {p['surface']};
-        border: 0;
-        border-top: 1px solid {p['border']};
-        border-radius: 0;
-    }}
-    QTabBar::tab {{
-        min-height: 30px;
-        padding: 0 14px;
-        color: {p['text_secondary']};
-        background: transparent;
-        border: 0;
-        border-bottom: 2px solid transparent;
-    }}
-    QTabBar::tab:hover {{
-        background: {p['subtle_fill']};
-    }}
-    QTabBar::tab:selected {{
-        color: {p['text']};
-        border-bottom-color: {p['accent']};
-        font-weight: 600;
-    }}
-    QMenuBar {{
-        background: {p['app_bg']};
-        border-bottom: 1px solid {p['border']};
-    }}
-    QMenuBar::item {{
-        padding: 5px 10px;
-        background: transparent;
-    }}
-    QMenuBar::item:selected, QMenu::item:selected {{
-        background: {p['selection']};
-    }}
-    QMenu {{
-        background: {THEME['surface']};
-        border: 1px solid {p['border']};
-        padding: 4px;
-    }}
-    QMenu::item {{
-        padding: 6px 24px 6px 10px;
-        border-radius: 4px;
-    }}
-    QStatusBar {{
-        background: {p['app_bg']};
-        border-top: 1px solid {p['border']};
-        color: {p['text_secondary']};
-    }}
-    QSplitter::handle {{
-        background: transparent;
-        width: 8px;
-        height: 8px;
-    }}
-    QSplitter::handle:hover {{
-        background: {p['border']};
-    }}
-    QSplitter#WorkSplitter::handle:vertical {{
-        background: transparent;
-        border-top: 1px solid {p['border']};
-        margin: 6px 0;
-    }}
-    QScrollBar:vertical {{
-        width: 11px;
-        background: transparent;
-        margin: 2px;
-    }}
-    QScrollBar::handle:vertical {{
-        min-height: 28px;
-        background: {p['scrollbar']};
-        border-radius: 5px;
-    }}
-    QScrollBar::handle:vertical:hover {{
-        background: {p['hover_border']};
-    }}
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
-    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-        height: 0;
-        background: transparent;
-    }}
-    QToolTip {{
-        color: {p['text']};
-        background: {THEME['surface']};
-        border: 1px solid {p['border_strong']};
-        border-radius: 6px;
-        padding: 5px;
-    }}
-    """
+def _rgba(color: str) -> QColor:
+    """解析 'rgba(r, g, b, a)' 形式的颜色字符串（QColor 不直接支持该语法）。"""
+
+    match = re.fullmatch(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", color)
+    if match:
+        return QColor(*(int(part) for part in match.groups()))
+    return QColor(color)
+
+
+def _build_palette(theme: dict) -> QPalette:
+    """按主题字典构建 QPalette（亮/暗两套共用同一映射，值逐项与旧实现一致）。"""
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(theme["window_bg"]))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(theme["text"]))
+    palette.setColor(QPalette.ColorRole.Base, QColor(theme["surface_alt"]))
+    palette.setColor(QPalette.ColorRole.Text, QColor(theme["text"]))
+    palette.setColor(QPalette.ColorRole.AlternateBase, _rgba(theme["subtle_fill"]))
+    palette.setColor(QPalette.ColorRole.Button, QColor(theme["surface_alt"]))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(theme["text"]))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(theme["accent"]))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(theme["accent_text"]))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(theme["surface"]))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(theme["text"]))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(theme["muted_text"]))
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.Text,
+        QColor(theme["disabled_text"]),
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.ButtonText,
+        QColor(theme["disabled_text"]),
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.Window,
+        QColor(theme["disabled_bg"]),
+    )
+    return palette
 
 
 def _force_light_scheme(app: QApplication) -> None:
     """Force the Qt light color scheme and a matching light palette.
 
-    Qt 6.8+ derives a dark palette from the Windows dark mode, while the
-    global QSS only covers explicitly styled widgets; untargeted controls
-    (plain QWidget backgrounds, QTabBar) fall back to the dark palette.
-    Pinning both the scheme and the palette keeps the whole UI light.
+    Qt 6.8+ derives a dark palette from the Windows dark mode; pinning
+    both the scheme and the palette keeps the base UI light until the
+    qfluentwidgets theme system takes over (see _apply_palette_for_theme).
     """
 
     hints = app.styleHints()
     if hasattr(hints, "setColorScheme"):
         hints.setColorScheme(Qt.ColorScheme.Light)
 
-    palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(THEME["window_bg"]))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(THEME["text"]))
-    palette.setColor(QPalette.ColorRole.Base, QColor(THEME["surface_alt"]))
-    palette.setColor(QPalette.ColorRole.Text, QColor(THEME["text"]))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(0, 0, 0, 8))
-    palette.setColor(QPalette.ColorRole.Button, QColor(THEME["surface_alt"]))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor(THEME["text"]))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(THEME["accent"]))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(THEME["accent_text"]))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(THEME["surface"]))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(THEME["text"]))
-    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(THEME["muted_text"]))
-    palette.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.Text,
-        QColor(THEME["disabled_text"]),
-    )
-    palette.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.ButtonText,
-        QColor(THEME["disabled_text"]),
-    )
-    palette.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.Window,
-        QColor(THEME["disabled_bg"]),
-    )
-    app.setPalette(palette)
+    app.setPalette(_build_palette(THEME))
+
+
+def _apply_palette_for_theme() -> None:
+    """按 qconfig 当前主题应用对应 QPalette（Theme.AUTO 已解析为明/暗）。"""
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    app.setPalette(_build_palette(THEME_DARK if isDarkTheme() else THEME))
 
 
 class _WheelGuard(QObject):
@@ -404,12 +150,17 @@ class _WheelGuard(QObject):
     def eventFilter(self, watched, event):
         if event.type() != QEvent.Type.Wheel:
             return False
-        if not isinstance(watched, (QAbstractSpinBox, QComboBox)):
+        # qfluentwidgets 的 ComboBox 不是 QComboBox 子类（ComboBoxBase + QPushButton）
+        if not isinstance(watched, (QAbstractSpinBox, QComboBox, ComboBoxBase)):
             return False
         if watched.hasFocus():
             return False
-        if isinstance(watched, QComboBox) and watched.view().isVisible():
-            return False
+        try:
+            if isinstance(watched, QComboBox) and watched.view().isVisible():
+                return False
+        except Exception:
+            # ComboBoxBase 无 view()，展开态由 popup 自身处理，这里直接放行
+            pass
         return True
 
 
@@ -430,13 +181,27 @@ def install_wheel_guard(app: QApplication | None = None) -> None:
     app._wit_wheel_guard = guard
 
 
+def _init_qfw(app: QApplication) -> None:
+    """初始化 qfluentwidgets 主题系统：配置加载、主题、主题色与 palette 同步。"""
+
+    if getattr(app, "_wit_qfw_initialized", False):
+        return
+    qconfig.load(str(writable_data_dir() / "qfw_config.json"))
+    setTheme(Theme.AUTO)
+    setThemeColor(QColor(THEME["accent"]))
+    qconfig.themeChangedFinished.connect(_apply_palette_for_theme)
+    # setTheme 期间信号已发出过一次（连接尚未建立），这里主动同步首次状态
+    _apply_palette_for_theme()
+    app._wit_qfw_initialized = True
+
+
 def apply_fluent_style(app: QApplication | None = None) -> None:
     app = app or QApplication.instance()
     if app is not None:
         _ensure_cjk_font(app)
         _force_light_scheme(app)
         install_wheel_guard(app)
-        app.setStyleSheet(_stylesheet())
+        _init_qfw(app)
 
 
 def _ensure_cjk_font(app: QApplication) -> None:
@@ -457,9 +222,18 @@ def _ensure_cjk_font(app: QApplication) -> None:
 
 
 def set_button_role(button: QPushButton, role: str) -> QPushButton:
-    button.setProperty("role", role)
-    button.style().unpolish(button)
-    button.style().polish(button)
+    """Deprecated shim：旧的 [role=...] 属性 QSS 已随全局样式移除。
+
+    保留签名以兼容尚未迁移的调用点；请改用 danger_button() 或
+    qfluentwidgets 自带的按钮样式。
+    """
+
+    warnings.warn(
+        "set_button_role 已废弃：基于 [role=...] 属性的 QSS 已移除，"
+        "请改用 ui.fluent.danger_button() 等专用构造器。",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return button
 
 
@@ -469,11 +243,11 @@ def section_label(text: str, secondary: str | None = None) -> QWidget:
 
     layout = QHBoxLayout(container)
     layout.setContentsMargins(0, 0, 0, 0)
-    title = QLabel(text)
+    title = StrongBodyLabel(text, container)
     title.setObjectName("SectionTitle")
     layout.addWidget(title)
     if secondary:
-        detail = QLabel(secondary)
+        detail = BodyLabel(secondary, container)
         detail.setObjectName("SecondaryText")
         layout.addWidget(detail)
     layout.addStretch()
@@ -483,6 +257,153 @@ def section_label(text: str, secondary: str | None = None) -> QWidget:
 def standard_icon(widget: QWidget, icon: QStyle.StandardPixmap):
     return widget.style().standardIcon(icon)
 
+
+# ---------------------------------------------------------------- 危险按钮
+
+_DANGER_LIGHT_QSS = """
+QPushButton {{
+    color: {danger};
+    background: transparent;
+    border: 1px solid {danger};
+    border-radius: 6px;
+    padding: 0 11px;
+    min-height: 30px;
+}}
+QPushButton:hover {{
+    color: #ffffff;
+    background: {danger_hover};
+    border-color: {danger_hover};
+}}
+QPushButton:pressed {{
+    color: #ffffff;
+    background: #9e2116;
+    border-color: #9e2116;
+}}
+QPushButton:disabled {{
+    color: {disabled_text};
+    background: {disabled_bg};
+    border-color: {border};
+}}
+"""
+
+_DANGER_DARK_QSS = """
+QPushButton {{
+    color: {danger};
+    background: transparent;
+    border: 1px solid {danger};
+    border-radius: 6px;
+    padding: 0 11px;
+    min-height: 30px;
+}}
+QPushButton:hover {{
+    color: #ffffff;
+    background: {danger_hover};
+    border-color: {danger_hover};
+}}
+QPushButton:pressed {{
+    color: #ffffff;
+    background: #b02a30;
+    border-color: #b02a30;
+}}
+QPushButton:disabled {{
+    color: {disabled_text};
+    background: {disabled_bg};
+    border-color: {border};
+}}
+"""
+
+
+def danger_button(text: str, parent: QWidget | None = None) -> PushButton:
+    """创建红色系危险操作按钮（qfluentwidgets PushButton + 亮/暗两套自定义 QSS）。"""
+
+    button = PushButton(text, parent)
+    setCustomStyleSheet(
+        button,
+        _DANGER_LIGHT_QSS.format(
+            danger=THEME["danger"],
+            danger_hover=THEME["danger_hover"],
+            disabled_text=THEME["disabled_text"],
+            disabled_bg=THEME["disabled_bg"],
+            border=THEME["border"],
+        ),
+        _DANGER_DARK_QSS.format(
+            danger=THEME_DARK["danger"],
+            danger_hover=THEME_DARK["danger_hover"],
+            disabled_text=THEME_DARK["disabled_text"],
+            disabled_bg=THEME_DARK["disabled_bg"],
+            border=THEME_DARK["border"],
+        ),
+    )
+    return button
+
+
+# ---------------------------------------------------------------- 对话框
+
+def _message_box(parent: QWidget, title: str, content: str) -> MessageBox:
+    """构造 qfluentwidgets MessageBox；parent 必须非 None。"""
+
+    if parent is None:
+        raise ValueError(
+            "信息框需要非 None 的 parent 窗口"
+            "（qfluentwidgets MessageBox 的遮罩层依赖父窗口几何信息）"
+        )
+    return MessageBox(title, content, parent)
+
+
+def info_box(parent: QWidget, title: str, content: str) -> None:
+    """模态信息提示框。"""
+
+    box = _message_box(parent, title, content)
+    box.yesButton.setText("确定")
+    box.hideCancelButton()
+    box.exec()
+
+
+def warn_box(parent: QWidget, title: str, content: str) -> None:
+    """模态警告框。"""
+
+    box = _message_box(parent, title, content)
+    box.yesButton.setText("确定")
+    box.hideCancelButton()
+    box.exec()
+
+
+def question_box(
+    parent: QWidget,
+    title: str,
+    content: str,
+    yes_text: str = "是",
+    no_text: str = "否",
+) -> bool:
+    """模态确认框；返回 True 表示用户选择“是”（MessageBox.Accepted）。"""
+
+    box = _message_box(parent, title, content)
+    box.yesButton.setText(yes_text)
+    box.cancelButton.setText(no_text)
+    return box.exec() == MessageBox.Accepted
+
+
+def enable_mica(window: QWidget) -> bool:
+    """尝试为窗口启用 Win11 Mica 背景材质；非 Win11 或失败时返回 False。"""
+
+    if sys.platform != "win32":
+        return False
+    try:
+        build = int(platform.version().split(".")[2])
+    except (IndexError, ValueError, AttributeError):
+        return False
+    if build < 22000:
+        return False
+    try:
+        from qframelesswindow import WindowEffect
+
+        WindowEffect().setMicaEffect(int(window.winId()))
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------- 动画
 
 def motion_enabled() -> bool:
     """Return whether short decorative UI animations should run."""
@@ -571,9 +492,15 @@ def animate_window_entrance(widget: QWidget, duration: int = 180) -> None:
     animation.start()
 
 
-def install_tab_fade(tab_widget: QTabWidget, duration: int = 140) -> None:
-    """Fade only the newly selected tab page; tab geometry remains stable."""
+def install_tab_fade(tab_widget: QTabWidget, duration: int = 220) -> None:
+    """Fade only the newly selected tab page; tab geometry remains stable.
 
+    仅对原生 QTabWidget 子类生效；qfluentwidgets 的 TabWidget 不是
+    QTabWidget 子类（自绘标签页、无原生 currentChanged 语义），直接 no-op。
+    """
+
+    if not isinstance(tab_widget, QTabWidget):
+        return
     if getattr(tab_widget, "_wit_tab_fade_installed", False):
         return
 
