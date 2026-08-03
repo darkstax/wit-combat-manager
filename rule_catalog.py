@@ -12,6 +12,7 @@ from threading import RLock
 from typing import Iterable, Mapping, Sequence
 import os
 import re
+import sys
 
 from models import RuleMode
 
@@ -74,6 +75,22 @@ def scan_directory_for_workbooks(directory: str | Path) -> dict[str, Path]:
                 result[key] = candidate
                 break
     return result
+
+
+def detect_builtin_preview_paths() -> dict[str, Path]:
+    """Return workbooks bundled into a preview build, or {} outside one.
+
+    Preview (development / friend-only) builds are produced by PyInstaller with
+    WIT_PREVIEW_DATA set; the workbooks are unpacked under ``sys._MEIPASS`` at
+    runtime. Normal source runs and official builds carry no bundled data.
+    """
+
+    if not getattr(sys, "frozen", False):
+        return {}
+    meipass = getattr(sys, "_MEIPASS", None)
+    if not meipass:
+        return {}
+    return scan_directory_for_workbooks(meipass)
 
 
 def search_entries(

@@ -158,10 +158,18 @@ class MainWindow(QMainWindow):
         self.settings = _load_settings()
         self.rulebook_dir = str(self.settings.get("rulebook_dir") or "")
         self.rulebook_pdf = str(self.settings.get("rulebook_pdf") or "")
+        self._using_preview = False
         if self.rulebook_dir:
             from rule_catalog import refresh_shared_catalog, scan_directory_for_workbooks
 
             refresh_shared_catalog(scan_directory_for_workbooks(self.rulebook_dir))
+        else:
+            from rule_catalog import detect_builtin_preview_paths, refresh_shared_catalog
+
+            preview_paths = detect_builtin_preview_paths()
+            if preview_paths:
+                refresh_shared_catalog(preview_paths)
+                self._using_preview = True
         self.rule_mode = RuleMode.coerce(self.settings.get("rule_mode", RuleMode.V1_2))
         self.rosters = {mode.value: [] for mode in RuleMode}
         self._changing_rule_mode = False
@@ -395,17 +403,20 @@ class MainWindow(QMainWindow):
 
     def _open_rule_browser(self):
         if self.rule_browser is None:
-            from rule_catalog import scan_directory_for_workbooks
+            from rule_catalog import detect_builtin_preview_paths, scan_directory_for_workbooks
             from ui.rule_browser import RuleBrowserDialog
 
-            workbook_paths = (
-                scan_directory_for_workbooks(self.rulebook_dir)
-                if self.rulebook_dir else {}
-            )
+            if self.rulebook_dir:
+                workbook_paths = scan_directory_for_workbooks(self.rulebook_dir)
+                is_preview = False
+            else:
+                workbook_paths = detect_builtin_preview_paths()
+                is_preview = bool(workbook_paths)
             self.rule_browser = RuleBrowserDialog(
                 self,
                 initial_version=self.rule_mode,
                 workbook_paths=workbook_paths,
+                is_preview=is_preview,
             )
         self.rule_browser.open_for_version(self.rule_mode)
 

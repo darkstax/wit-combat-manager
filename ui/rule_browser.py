@@ -59,9 +59,11 @@ class RuleBrowserDialog(QDialog):
         catalog: RuleCatalog | None = None,
         initial_version: RuleMode | str | None = None,
         workbook_paths: Mapping[str, str | os.PathLike] | Sequence[str | os.PathLike] | None = None,
+        is_preview: bool = False,
     ):
         super().__init__(parent)
         self.catalog = catalog or RuleCatalog(workbook_paths)
+        self.is_preview = is_preview
         self._results: list[RuleEntry] = []
         self._item_entries: dict[int, RuleEntry] = {}
         self._load_started = False
@@ -227,7 +229,8 @@ class RuleBrowserDialog(QDialog):
             self.catalog.load_external()
             self._on_catalog_loaded()
             return
-        self.status_label.setText(f"正在载入 {len(self.catalog.workbook_paths)} 份本地资料表…")
+        kind = "预览" if self.is_preview else "本地"
+        self.status_label.setText(f"正在载入 {len(self.catalog.workbook_paths)} 份{kind}资料表…")
         self._loader = _CatalogLoader(self.catalog, self)
         self._loader.loaded.connect(self._on_catalog_loaded)
         self._loader.failed.connect(self._on_catalog_failed)
@@ -305,6 +308,10 @@ class RuleBrowserDialog(QDialog):
             self.empty_hint.show()
             self.result_tree.hide()
             state = "未配置规则书"
+        elif self.is_preview:
+            self.empty_hint.hide()
+            self.result_tree.show()
+            state = "预览规则数据"
         else:
             self.empty_hint.hide()
             self.result_tree.show()

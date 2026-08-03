@@ -1,8 +1,11 @@
+import sys
+
 from rule_catalog import (
     WORKBOOK_FILENAMES,
     RuleCatalog,
     RuleEntry,
     _cell_text,
+    detect_builtin_preview_paths,
     get_shared_catalog,
     refresh_shared_catalog,
     scan_directory_for_workbooks,
@@ -102,6 +105,25 @@ def test_scan_directory_matches_case_insensitively_and_omits_missing(tmp_path):
 
 def test_scan_directory_returns_empty_for_missing_directory(tmp_path):
     assert scan_directory_for_workbooks(tmp_path / "不存在") == {}
+
+
+def test_detect_builtin_preview_paths_returns_workbooks_when_frozen(tmp_path, monkeypatch):
+    for filename in WORKBOOK_FILENAMES.values():
+        (tmp_path / filename).touch()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    paths = detect_builtin_preview_paths()
+
+    assert set(paths) == set(WORKBOOK_FILENAMES)
+    assert all(path.is_file() for path in paths.values())
+
+
+def test_detect_builtin_preview_paths_returns_empty_when_not_frozen(monkeypatch):
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+
+    assert detect_builtin_preview_paths() == {}
 
 
 def test_refresh_shared_catalog_replaces_instance():
