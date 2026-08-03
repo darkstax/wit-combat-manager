@@ -9,8 +9,8 @@ from PySide6.QtWidgets import (
     QDialog, QPushButton, QApplication, QFrame, QTabWidget, QStyle,
     QScrollArea, QComboBox, QMessageBox, QToolButton, QMenu,
 )
-from PySide6.QtCore import QEvent, QPoint, QTimer, Qt, Signal, QObject
-from PySide6.QtGui import QAction, QPixmap, QPainter, QFont
+from PySide6.QtCore import QEvent, QPoint, QTimer, Qt, Signal, QObject, QUrl
+from PySide6.QtGui import QAction, QPixmap, QPainter, QFont, QDesktopServices
 from app_paths import writable_data_dir
 from models import RuleMode, Unit
 from persistence import load_rosters, load_text, save_rosters, save_text
@@ -156,6 +156,12 @@ class MainWindow(QMainWindow):
 
         self.units: list[Unit] = []
         self.settings = _load_settings()
+        self.rulebook_dir = str(self.settings.get("rulebook_dir") or "")
+        self.rulebook_pdf = str(self.settings.get("rulebook_pdf") or "")
+        if self.rulebook_dir:
+            from rule_catalog import refresh_shared_catalog, scan_directory_for_workbooks
+
+            refresh_shared_catalog(scan_directory_for_workbooks(self.rulebook_dir))
         self.rule_mode = RuleMode.coerce(self.settings.get("rule_mode", RuleMode.V1_2))
         self.rosters = {mode.value: [] for mode in RuleMode}
         self._changing_rule_mode = False
@@ -222,6 +228,11 @@ class MainWindow(QMainWindow):
 
         self.more_menu = QMenu(self)
         self.more_menu.addAction(self.rule_browser_action)
+        self.more_menu.addSeparator()
+        rulebook_dir_action = self.more_menu.addAction("规则书路径（Excel）...")
+        rulebook_dir_action.triggered.connect(self._set_rulebook_dir)
+        rulebook_pdf_action = self.more_menu.addAction("打开规则书（PDF）...")
+        rulebook_pdf_action.triggered.connect(self._open_rulebook_pdf)
         self.more_menu.addSeparator()
         bg_action = self.more_menu.addAction("设置背景图片...")
         bg_action.triggered.connect(self._set_background)
@@ -384,13 +395,68 @@ class MainWindow(QMainWindow):
 
     def _open_rule_browser(self):
         if self.rule_browser is None:
+            from rule_catalog import scan_directory_for_workbooks
             from ui.rule_browser import RuleBrowserDialog
 
+            workbook_paths = (
+                scan_directory_for_workbooks(self.rulebook_dir)
+                if self.rulebook_dir else {}
+            )
             self.rule_browser = RuleBrowserDialog(
                 self,
                 initial_version=self.rule_mode,
+                workbook_paths=workbook_paths,
             )
         self.rule_browser.open_for_version(self.rule_mode)
+
+    # ============================================================
+    # 规则书
+    # ============================================================
+
+    def _set_rulebook_dir(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, "选择规则书 Excel 工作簿目录", self.rulebook_dir or ""
+        )
+        if not directory:
+            return
+        from rule_catalog import WORKBOOK_FILENAMES, refresh_shared_catalog, scan_directory_for_workbooks
+
+        paths = scan_directory_for_workbooks(directory)
+        refresh_shared_catalog(paths)
+        self.rulebook_dir = directory
+        self.settings["rulebook_dir"] = directory
+        _save_settings(self.settings)
+        if len(paths) == len(WORKBOOK_FILENAMES):
+            QMessageBox.information(
+                self, "规则书路径", f"已载入全部 {len(paths)} 份规则书工作簿：\n{directory}"
+            )
+        else:
+            missing = [
+                filename
+                for filename in WORKBOOK_FILENAMES.values()
+                if not any(
+                    path.name.casefold() == filename.casefold()
+                    for path in paths.values()
+                )
+            ]
+            QMessageBox.warning(
+                self, "规则书路径",
+                "目录中未找到规则书工作簿，请在目录中放置以下文件：\n\n"
+                + "\n".join(missing),
+            )
+
+    def _open_rulebook_pdf(self):
+        if not (self.rulebook_pdf and os.path.exists(self.rulebook_pdf)):
+            path, _ = QFileDialog.getOpenFileName(
+                self, "选择规则书（PDF）", "",
+                "PDF 文件 (*.pdf);;所有文件 (*.*)"
+            )
+            if not path:
+                return
+            self.rulebook_pdf = path
+            self.settings["rulebook_pdf"] = path
+            _save_settings(self.settings)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(self.rulebook_pdf))
 
     def _on_central_resize(self, event):
         """central 大小变化时，同步背景层和内容层"""

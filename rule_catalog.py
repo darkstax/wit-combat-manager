@@ -13,7 +13,7 @@ from typing import Iterable, Mapping, Sequence
 import os
 import re
 
-from models import ELEMENTAL_BURST_EFFECTS, RuleMode
+from models import RuleMode
 
 
 WORKBOOK_FILENAMES = {
@@ -22,8 +22,6 @@ WORKBOOK_FILENAMES = {
     "v12_arts": "v1.2源石技艺.xlsx",
     "v12_card": "v1.2.角色卡.Plus .xlsx",
 }
-
-BUILTIN_PROFESSIONS: tuple[str, ...] = ()
 
 _SPACE_RE = re.compile(r"\s+")
 _FORMULA_RE = re.compile(r"^=(?:DISPIMG|_xlfn\.DISPIMG)\(", re.IGNORECASE)
@@ -41,7 +39,7 @@ class RuleEntry:
     category: str
     title: str
     body: str
-    source: str = "内置规则摘要"
+    source: str = ""
     keywords: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self):
@@ -58,27 +56,21 @@ class RuleEntry:
         ).casefold()
 
 
-def discover_workbook_paths(download_dir: str | os.PathLike | None = None) -> dict[str, Path]:
-    """Find the four supported workbooks without requiring fixed machine paths."""
+def scan_directory_for_workbooks(directory: str | Path) -> dict[str, Path]:
+    """Find the supported workbooks inside one directory, case-insensitively.
 
-    roots: list[Path] = []
-    if download_dir:
-        roots.append(Path(download_dir).expanduser())
-    user_profile = os.environ.get("USERPROFILE")
-    if user_profile:
-        roots.append(Path(user_profile) / "Downloads")
-    roots.append(Path.home() / "Downloads")
+    Only files whose names match the supported workbook filenames are returned;
+    files that are not present are simply omitted from the result.
+    """
 
-    unique_roots: list[Path] = []
-    for root in roots:
-        if root not in unique_roots:
-            unique_roots.append(root)
-
+    root = Path(directory).expanduser()
     result: dict[str, Path] = {}
+    if not root.is_dir():
+        return result
     for key, filename in WORKBOOK_FILENAMES.items():
-        for root in unique_roots:
-            candidate = root / filename
-            if candidate.is_file():
+        wanted = filename.casefold()
+        for candidate in root.iterdir():
+            if candidate.is_file() and candidate.name.casefold() == wanted:
                 result[key] = candidate
                 break
     return result
@@ -137,7 +129,6 @@ class RuleCatalog:
         self,
         workbook_paths: Mapping[str, str | os.PathLike] | Sequence[str | os.PathLike] | None = None,
     ):
-        self._builtin_entries = tuple(_builtin_entries())
         self._external_entries: tuple[RuleEntry, ...] = ()
         self._workbook_paths = _normalize_workbook_paths(workbook_paths)
         self._external_loaded = False
@@ -159,11 +150,11 @@ class RuleCatalog:
     def workbook_paths(self) -> dict[str, Path]:
         return dict(self._workbook_paths)
 
-    def entries(self, include_external: bool = True) -> tuple[RuleEntry, ...]:
+    def entries(self) -> tuple[RuleEntry, ...]:
+        """Return all currently loaded (external workbook) entries."""
+
         with self._lock:
-            if include_external:
-                return self._builtin_entries + self._external_entries
-            return self._builtin_entries
+            return self._external_entries
 
     def categories(self, version: RuleMode | str | None = None) -> list[str]:
         normalized_version = RuleMode.coerce(version).value if version else None
@@ -266,11 +257,26 @@ def get_shared_catalog() -> RuleCatalog:
         return _shared_catalog
 
 
+def refresh_shared_catalog(
+    workbook_paths: Mapping[str, str | os.PathLike] | Sequence[str | os.PathLike] | None,
+) -> RuleCatalog:
+    """Rebuild the process-wide shared catalog with the given workbook paths.
+
+    Used after the user changes the rulebook directory setting so that
+    ``get_shared_catalog()`` observes the new workbook locations.
+    """
+
+    global _shared_catalog
+    with _shared_catalog_lock:
+        _shared_catalog = RuleCatalog(workbook_paths)
+        return _shared_catalog
+
+
 def _normalize_workbook_paths(
     paths: Mapping[str, str | os.PathLike] | Sequence[str | os.PathLike] | None,
 ) -> dict[str, Path]:
     if paths is None:
-        return discover_workbook_paths()
+        return {}
     if isinstance(paths, Mapping):
         return {
             key: Path(value).expanduser()
@@ -284,122 +290,6 @@ def _normalize_workbook_paths(
         for key, filename in WORKBOOK_FILENAMES.items()
         if filename in by_name and by_name[filename].is_file()
     }
-
-
-def _builtin_entries() -> list[RuleEntry]:
-    entries = [
-        RuleEntry(
-            "0.3", "战斗流程", "先攻顺序",
-            "按速度从高到低行动；同速比较反应机动。两项都相同时，由使用者填写反应机动检定结果决定顺序。迅捷与迟缓影响下一轮的首尾位置。",
-            keywords=("速度", "反应机动", "迅捷", "迟缓"),
-        ),
-        RuleEntry(
-            "0.3", "攻击与伤害", "攻击检定",
-            "使用者填写 d100 结果和武器技能成功率。检定成功后再填写伤害骰结果；管理器不代替玩家或 GM 掷骰。",
-            keywords=("d100", "命中", "成功率", "手动骰值"),
-        ),
-        RuleEntry(
-            "0.3", "攻击与伤害", "伤害计算",
-            "基础结构为[(攻击力+常数)×倍率-对应抗性+最终常数]×最终倍率。物理与法术伤害扣除对应抗性，真实伤害不受抗性和减伤影响。",
-            keywords=("物理抗性", "法术抗性", "真实伤害", "倍率"),
-        ),
-        RuleEntry(
-            "0.3", "生命与治疗", "濒死与死亡",
-            "HP降到0时进入濒死；理论HP不高于负的最大HP时死亡。濒死单位不能行动、触发被动或接受治疗；再次受击时由使用者填写濒死检定结果。",
-            keywords=("HP", "濒死检定", "死亡", "禁疗"),
-        ),
-        RuleEntry(
-            "0.3", "状态", "状态升级链",
-            "寒冷再次施加升级为冻结；震慑升级为眩晕；停顿升级为束缚；困顿升级为睡眠；失重升级为浮空。强状态覆盖弱状态。",
-            keywords=("寒冷", "冻结", "震慑", "眩晕", "停顿", "束缚", "困顿", "睡眠", "失重", "浮空"),
-        ),
-        RuleEntry(
-            "0.3", "状态", "标记",
-            "标记本身只作为特定技能的触发条件，不自动视为其他状态。",
-            keywords=("技能触发",),
-        ),
-        RuleEntry(
-            "0.3", "状态", "力量与穿甲",
-            "力量使伤害增加10。穿甲忽略庇护，并忽略目标一半抗性；它与 v1.2 的穿透不是同一效果。",
-            keywords=("力量", "穿甲", "庇护", "抗性"),
-        ),
-        RuleEntry(
-            "0.3", "元素损伤", "元素韧性与爆发",
-            "元素损伤将韧性降到0时立即爆发，并立刻补满元素韧性。爆发的10d6总值由使用者填写。",
-            keywords=("韧性", "10d6", "手动骰值"),
-        ),
-        RuleEntry(
-            "1.2", "使用说明", "手动填写骰值",
-            "攻击、辅助、效能与元素爆发等骰值由玩家或 GM 实际投掷后填写；管理器负责校验输入并计算结果。",
-            keywords=("骰子", "掷骰", "攻击骰", "辅助骰", "效能骰"),
-        ),
-        RuleEntry(
-            "1.2", "战斗流程", "先攻模式",
-            "可使用团队先攻、传统逐人先攻或由 GM 客观指定先动阵营。传统先攻的反应机动检定总值由使用者填写。",
-            keywords=("团队先攻", "传统先攻", "反应机动", "客观判断"),
-        ),
-        RuleEntry(
-            "1.2", "攻击与伤害", "攻击与伤害计算",
-            "攻击检定总值达到目标抗性 DC 时命中，折前值减去对应 DC 得到最终伤害。多重修正按规则先加算、后乘算；真实伤害不扣抗性。",
-            keywords=("抗性DC", "折前伤害", "最终伤害", "真实伤害"),
-        ),
-        RuleEntry(
-            "1.2", "生命与治疗", "濒死、伤残与重振",
-            "HP归零后进入濒死；溢出及濒死期间受到的最终伤害会降低生命上限，生命上限归零时死亡。重振消耗1耐力，并按本次回复值救起目标。",
-            keywords=("生命上限", "濒死", "死亡", "重振", "耐力"),
-        ),
-        RuleEntry(
-            "1.2", "元素损伤", "元素韧性与爆发",
-            "精英阶段零、一、二的基础元素韧性分别为6、9、12。韧性归零后进入元素爆发，爆发持续到目标自己的下个回合开始；爆发骰值由使用者填写。",
-            keywords=("精零", "精一", "精二", "爆发骰", "辅助骰"),
-        ),
-        RuleEntry(
-            "1.2", "状态", "标记",
-            "标记同时被视为停顿、震颤、寒冷与困顿，可参与相应状态判定和升级。",
-            keywords=("停顿", "震颤", "寒冷", "困顿"),
-        ),
-        RuleEntry(
-            "1.2", "状态", "穿透",
-            "穿透使攻击忽略掩体效果；它不等同于 v0.3 中忽略部分抗性的穿甲。",
-            keywords=("掩体", "穿甲"),
-        ),
-        RuleEntry(
-            "1.2", "状态", "状态升级链",
-            "麻痹再次施加升级为眩晕；寒冷升级为冻结；困顿升级为睡眠；停顿升级为束缚。",
-            keywords=("麻痹", "眩晕", "寒冷", "冻结", "困顿", "睡眠", "停顿", "束缚"),
-        ),
-    ]
-
-    v03_bursts = {
-        "凋亡损伤": "10d6元素伤害，并施加虚弱、失去10SP。",
-        "灼燃损伤": "10d6元素伤害，法术抗性-10，持续到战斗结束。",
-        "侵蚀损伤": "10d6元素伤害，物理抗性-10，持续到战斗结束。",
-        "神经损伤": "10d6真实伤害，并施加眩晕。",
-        "组织损伤": "10d6元素伤害，并施加禁疗。",
-        "毒性损伤": "10d6元素伤害，并施加虚弱与迟缓。",
-        "结晶损伤": "10d6元素伤害，并增加感染。感染骰值由使用者填写。",
-    }
-    entries.extend(
-        RuleEntry("0.3", "元素爆发", name, description, keywords=("10d6", "元素韧性"))
-        for name, description in v03_bursts.items()
-    )
-
-    for name, effect in ELEMENTAL_BURST_EFFECTS.items():
-        multiplier = effect.get("true_dmg_mult", 0)
-        statuses = "、".join(effect.get("statuses", ()))
-        details = [f"造成爆发骰值×{multiplier}的真实伤害"]
-        if statuses:
-            details.append(f"施加{statuses}")
-        if effect.get("extra"):
-            details.append(str(effect["extra"]))
-        entries.append(
-            RuleEntry(
-                "1.2", "元素爆发", name, "；".join(details) + "。",
-                keywords=("元素韧性", "爆发骰"),
-            )
-        )
-    return entries
-
 
 def _read_v03_card(path: Path, load_workbook) -> list[RuleEntry]:
     wb = load_workbook(path, read_only=True, data_only=True, keep_links=False)

@@ -135,6 +135,11 @@ class RuleBrowserDialog(QDialog):
         self.result_tree.setAlternatingRowColors(True)
         self.result_tree.setUniformRowHeights(True)
         self.result_tree.setAccessibleName("查询结果")
+        self.empty_hint = QLabel("未配置规则书路径：请在 更多 → 规则书路径（Excel）中设置")
+        self.empty_hint.setObjectName("SecondaryText")
+        self.empty_hint.setWordWrap(True)
+        self.empty_hint.hide()
+        result_layout.addWidget(self.empty_hint, 1)
         result_layout.addWidget(self.result_tree, 1)
         splitter.addWidget(result_pane)
 
@@ -238,7 +243,7 @@ class RuleBrowserDialog(QDialog):
         self._loader = None
 
     def _on_catalog_failed(self, message: str):
-        self.status_label.setText("本地资料表载入失败，当前仅显示内置规则摘要")
+        self.status_label.setText("本地资料表载入失败，请检查规则书工作簿文件")
         self.status_label.setToolTip(message)
         self._loader = None
 
@@ -295,9 +300,15 @@ class RuleBrowserDialog(QDialog):
             self.detail_meta.clear()
             self.detail_text.clear()
 
-        state = "资料表已载入" if self.catalog.external_loaded else "正在准备本地资料表"
-        if not self._load_started:
-            state = "内置规则摘要"
+        configured = bool(self.catalog.workbook_paths) or bool(self._results)
+        if not self._results and not configured:
+            self.empty_hint.show()
+            self.result_tree.hide()
+            state = "未配置规则书"
+        else:
+            self.empty_hint.hide()
+            self.result_tree.show()
+            state = "资料表已载入" if self.catalog.external_loaded else "正在准备本地资料表"
         error_note = f"，{len(self.catalog.errors)} 份资料读取异常" if self.catalog.errors else ""
         self.status_label.setText(f"{len(self._results)} 条结果 · {state}{error_note}")
 
