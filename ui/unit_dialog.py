@@ -119,6 +119,13 @@ class UnitDialog(QDialog):
         self.speed_spin.setRange(0, 99)
         form3.addRow("速度", self.speed_spin)
 
+        self.init_rank_spin = QSpinBox()
+        self.init_rank_spin.setRange(0, 999)
+        self.init_rank_spin.setValue(0)
+        self.init_rank_spin.setToolTip(
+            "数值大者先行动，0 表示未设置（最后行动）；\n仅「指定顺位」先攻模式使用")
+        form3.addRow("先攻顺位", self.init_rank_spin)
+
         self.reaction_mobility_spin = QSpinBox()
         self.reaction_mobility_spin.setRange(0, 999)
         form3.addRow("反应机动", self.reaction_mobility_spin)
@@ -308,6 +315,7 @@ class UnitDialog(QDialog):
         self.effect_die_edit.setText(u.effect_die)
         self.auxiliary_die_edit.setText(u.auxiliary_die)
         self.speed_spin.setValue(u.speed)
+        self.init_rank_spin.setValue(u.initiative_rank)
         self.reaction_mobility_spin.setValue(u.reaction_mobility)
         self.weight_spin.setValue(u.weight)
         self.phys_res_spin.setValue(u.physical_resist)
@@ -371,6 +379,7 @@ class UnitDialog(QDialog):
         target.effect_die = self.effect_die_edit.text().strip()
         target.auxiliary_die = self.auxiliary_die_edit.text().strip()
         target.speed = self.speed_spin.value()
+        target.initiative_rank = self.init_rank_spin.value()
         target.reaction_mobility = self.reaction_mobility_spin.value()
         target.weight = self.weight_spin.value()
         target.physical_resist = self.phys_res_spin.value()
@@ -434,6 +443,7 @@ class UnitDialog(QDialog):
             self.initial_max_hp_spin.setValue(10)
             self.temp_hp_spin.setValue(0)
             self.speed_spin.setValue(10)
+            self.init_rank_spin.setValue(0)
             self.reaction_mobility_spin.setValue(0)
             self.weight_spin.setValue(0)
             self.phys_res_spin.setValue(0)

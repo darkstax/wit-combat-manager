@@ -317,6 +317,7 @@ class Unit:
     max_hp: int = 10
     initial_max_hp: int = 0
     speed: int = 10
+    initiative_rank: int = 0  # 指定顺位先攻模式的顺位，0=未设置（排最后）
     reaction_mobility: int = 0
     physical_resist: int = 0
     magic_resist: int = 0
@@ -347,6 +348,7 @@ class Unit:
             self.unit_type = "player"
         if not self.unit_id:
             self.unit_id = uuid.uuid4().hex[:8]
+        self.initiative_rank = max(0, int(self.initiative_rank))
         normalized_statuses = []
         for item in self.status_effects:
             if isinstance(item, str):
@@ -492,6 +494,7 @@ class Unit:
             "max_hp": self.max_hp,
             "initial_max_hp": self.initial_max_hp,
             "speed": self.speed,
+            "initiative_rank": self.initiative_rank,
             "reaction_mobility": self.reaction_mobility,
             "physical_resist": self.physical_resist,
             "magic_resist": self.magic_resist,
@@ -539,6 +542,7 @@ class Unit:
             max_hp=d.get("max_hp", 10),
             initial_max_hp=d.get("initial_max_hp", d.get("max_hp", 10)),
             speed=d.get("speed", 10),
+            initiative_rank=d.get("initiative_rank", 0),
             reaction_mobility=d.get("reaction_mobility", d.get("speed", 0)),
             physical_resist=d.get("physical_resist", 0),
             magic_resist=d.get("magic_resist", 0),
@@ -573,7 +577,7 @@ class CombatState:
     turn: int = 0
     now_index: int = 0
     turn_order: list[str] = field(default_factory=list)  # unit_id 列表
-    initiative_mode: str = "traditional"  # "team" | "traditional" | "manual"
+    initiative_mode: str = "traditional"  # "team" | "traditional" | "manual" | "ranked"
     initiative_rolls: dict[str, int] = field(default_factory=dict)
     active: bool = False
     first_team: Optional[str] = None

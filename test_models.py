@@ -1,6 +1,5 @@
 from models import DiceGroup, RollInput, Unit, UNIT_TYPES, UNIT_TYPE_LABELS, THEME
 
-
 def test_manual_roll_input_sums_groups_and_modifier():
     roll = RollInput(
         groups=(
@@ -66,3 +65,21 @@ def test_unit_type_labels_complete():
 
 def test_theme_has_ally_row_bg():
     assert THEME["ally_row_bg"] == "#e3f4e6"
+
+
+def test_initiative_rank_round_trip():
+    unit = Unit(name="Ranked", initiative_rank=7)
+    loaded = Unit.from_dict(unit.to_dict())
+    assert loaded.initiative_rank == 7
+    assert unit.to_dict()["initiative_rank"] == 7
+
+
+def test_initiative_rank_defaults_to_zero():
+    assert Unit(name="Legacy").initiative_rank == 0
+    loaded = Unit.from_dict({})
+    assert loaded.initiative_rank == 0
+
+
+def test_initiative_rank_negative_normalized_to_zero():
+    unit = Unit(name="Neg", initiative_rank=-3)
+    assert unit.initiative_rank == 0

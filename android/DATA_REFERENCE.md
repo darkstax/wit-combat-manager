@@ -62,6 +62,7 @@ Android 建议使用 Kotlin `data class`，JSON 字段名保持 snake_case，以
 | `max_hp` | `Int` | `10` | 不得小于 0 |
 | `initial_max_hp` | `Int` | `0` | 小于等于 0 时使用当前 `max_hp` |
 | `speed` | `Int` | `10` | 速度 |
+| `initiative_rank` | `Int` | `0` | 指定顺位先攻模式的顺位；0 表示未设置（排最后），负值归一化为 0 |
 | `reaction_mobility` | `Int` | `0` | 反应机动 |
 | `physical_resist` | `Int` | `0` | 物理抗性 |
 | `magic_resist` | `Int` | `0` | 法术抗性 |
@@ -117,7 +118,7 @@ data class PendingRoll(
 | `turn` | `Int` | `0` | 当前轮次，不得小于 0 |
 | `now_index` | `Int` | `0` | 当前行动者在顺序中的下标 |
 | `turn_order` | `List<String>` | 空列表 | `unit_id` 顺序 |
-| `initiative_mode` | `String` | `traditional` | `team`、`traditional`、`manual`；v0.3 使用 `v03_speed` |
+| `initiative_mode` | `String` | `traditional` | `team`、`traditional`、`manual`、`ranked`；v0.3 使用 `v03_speed` |
 | `initiative_rolls` | `Map<String, Int>` | 空映射 | 单位 ID 到手填检定结果 |
 | `active` | `Boolean` | `false` | 战斗是否进行中 |
 | `first_team` | `String?` | `null` | `player` 或 `monster` |

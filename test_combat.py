@@ -1,12 +1,12 @@
 """TRPG 战斗管理器 - 核心战斗逻辑单元测试"""
 import pytest
-from models import Unit, CombatState
+from models import Unit, CombatState, RuleMode
 from combat import (
     _calc_damage, _calc_true_damage,
     _calc_healing, _calc_status, _calc_elemental,
     apply_damage, apply_healing, apply_status, apply_elemental_damage,
     resolve_pending_elemental_burst,
-    team_initiative, traditional_initiative, manual_initiative,
+    team_initiative, traditional_initiative, manual_initiative, ranked_initiative,
     next_actor, advance_turn, _apply_speed_reorder,
     process_end_of_turn, process_end_attack,
     process_turn_start, process_round_start,
@@ -403,6 +403,37 @@ class TestInitiative:
         monster = _u(name="M1", speed=20, unit_type="monster")
         state = manual_initiative("player", [player], [monster])
         assert state.turn_order[0] == player.unit_id
+
+    def test_ranked_initiative_orders_by_rank_desc(self):
+        a = _u(name="A", initiative_rank=5)
+        b = _u(name="B", initiative_rank=10)
+        c = _u(name="C", initiative_rank=1)
+        state = ranked_initiative([a, b], [c])
+        assert state.initiative_mode == "ranked"
+        assert state.turn_order == [b.unit_id, a.unit_id, c.unit_id]
+
+    def test_ranked_initiative_ties_stable_by_unit_id(self):
+        x = _u(name="X", initiative_rank=7, unit_id="unit_x")
+        y = _u(name="Y", initiative_rank=7, unit_id="unit_y")
+        state = ranked_initiative([x, y], [])
+        # 同顺位按 unit_id 升序稳定排序（此处添加顺序即 unit_id 升序）
+        assert state.turn_order == [x.unit_id, y.unit_id]
+        state2 = ranked_initiative([y, x], [])
+        assert state2.turn_order == [x.unit_id, y.unit_id]
+
+    def test_ranked_initiative_zero_rank_last(self):
+        high = _u(name="High", initiative_rank=9)
+        zero = _u(name="Zero", initiative_rank=0)
+        state = ranked_initiative([zero], [high])
+        assert state.turn_order == [high.unit_id, zero.unit_id]
+
+    def test_ranked_initiative_v03_dispatches(self):
+        a = _u(name="A", initiative_rank=3)
+        b = _u(name="B", initiative_rank=8)
+        state = ranked_initiative([a], [b], rule_mode=RuleMode.V0_3)
+        assert state.initiative_mode == "ranked"
+        assert state.rule_mode == RuleMode.V0_3.value
+        assert state.turn_order == [b.unit_id, a.unit_id]
 
 
 # ============================================================

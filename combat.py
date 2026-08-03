@@ -86,6 +86,31 @@ def manual_initiative(
     return state
 
 
+def ranked_initiative(
+    players: list[Unit],
+    monsters: list[Unit],
+    rule_mode: RuleMode | str = RuleMode.V1_2,
+) -> CombatState:
+    """按各单位 initiative_rank 降序生成行动顺序；
+    同顺位按 unit_id 稳定排序，顺位 0（未设置）排最后。"""
+    mode = RuleMode.coerce(rule_mode)
+    if mode == RuleMode.V0_3:
+        from combat_v03 import ranked_initiative as _ranked_initiative
+        return _ranked_initiative(players, monsters, rule_mode)
+    state = CombatState(
+        turn=1,
+        initiative_mode="ranked",
+        active=True,
+        rule_mode=mode.value,
+    )
+    units_by_id = {u.unit_id: u for u in players + monsters}
+    state.turn_order = sorted(
+        [u.unit_id for u in players + monsters],
+        key=lambda uid: (-units_by_id[uid].initiative_rank, uid),
+    )
+    return state
+
+
 def traditional_initiative(
     units: list[Unit],
     dice_faces: int = 20,

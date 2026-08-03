@@ -17,7 +17,7 @@ from models import (
     element_types_for, status_names_for, x_statuses_for,
 )
 from combat import (
-    team_initiative, traditional_initiative, manual_initiative,
+    team_initiative, traditional_initiative, manual_initiative, ranked_initiative,
     apply_damage, apply_healing, apply_elemental_damage,
     resolve_pending_elemental_burst,
     apply_status, clear_all_statuses, next_actor, advance_turn,
@@ -135,6 +135,7 @@ class CombatPanel(QWidget):
         self.init_mode_combo.addItem("传统先攻", "traditional")
         self.init_mode_combo.addItem("团队先攻", "team")
         self.init_mode_combo.addItem("客观判断", "manual")
+        self.init_mode_combo.addItem("指定顺位", "ranked")
         self.init_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self.init_mode_combo.setMinimumWidth(112)
         command_layout.addWidget(self.init_mode_combo, 0, 1)
@@ -492,10 +493,12 @@ class CombatPanel(QWidget):
         self.init_mode_combo.clear()
         if self.rule_mode == RuleMode.V0_3:
             self.init_mode_combo.addItem("速度先攻", "v03_speed")
+            self.init_mode_combo.addItem("指定顺位", "ranked")
         else:
             self.init_mode_combo.addItem("传统先攻", "traditional")
             self.init_mode_combo.addItem("团队先攻", "team")
             self.init_mode_combo.addItem("客观判断", "manual")
+            self.init_mode_combo.addItem("指定顺位", "ranked")
         self.init_mode_combo.blockSignals(False)
 
         self.status_combo.blockSignals(True)
@@ -608,6 +611,11 @@ class CombatPanel(QWidget):
             )
             self._set_team_score(
                 f"客观判断: {'玩家' if self.combat_state.first_team == 'player' else '怪物'}先行")
+        elif mode == "ranked":
+            self.combat_state = ranked_initiative(
+                players, monsters, rule_mode=self.rule_mode
+            )
+            self._set_team_score("指定顺位: 按单位先攻顺位排序")
         else:
             roll_units = all_units
             if self.rule_mode == RuleMode.V0_3:
@@ -857,6 +865,8 @@ class CombatPanel(QWidget):
                 continue
             roll = self.combat_state.initiative_rolls.get(uid, "")
             roll_text = f" (检定: {roll})" if roll else ""
+            if self.combat_state.initiative_mode == "ranked":
+                roll_text = f" (顺位: {unit.initiative_rank})"
             hp = f"HP:{unit.current_hp}/{unit.max_hp}"
             tenacity = f"韧性:{unit.elemental_tenacity_current}/{unit.elemental_tenacity_max}"
             line = f"{i + 1}. {unit.name}  [{hp}] [{tenacity}]{roll_text}"

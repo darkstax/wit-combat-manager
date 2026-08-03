@@ -322,6 +322,7 @@ class UnitPanel(QWidget):
             f"血量: {unit.current_hp}/{unit.max_hp}  初始上限: {unit.initial_max_hp}  临时HP: {unit.temp_hp}",
             f"伤残等级: {unit.injury_level()}  SP: {unit.current_sp}/{unit.max_sp}  耐力: {unit.current_stamina}/{unit.max_stamina}",
             f"速度: {unit.speed}  反应机动: {unit.reaction_mobility}  重量: {unit.weight}",
+            f"先攻顺位: {unit.initiative_rank}",
             f"效能骰: {unit.effect_die or '--'}  辅助骰: {unit.auxiliary_die or '--'}",
             f"物抗: {unit.physical_resist}  法抗: {unit.magic_resist}  护甲: {unit.armor_type}",
             f"元素韧性: {unit.elemental_tenacity_current}/{unit.elemental_tenacity_max}",
