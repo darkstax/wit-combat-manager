@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QGraphicsOpacityEffect,
+    QLabel,
     QPushButton,
     QStyle,
     QTabWidget,
@@ -375,6 +376,48 @@ def question_box(
     box.yesButton.setText(yes_text)
     box.cancelButton.setText(no_text)
     return box.exec() == MessageBox.Accepted
+
+
+# ---------------------------------------------------------------- 空态占位浮层
+
+class EmptyStateLabel(QLabel):
+    """列表/树空态提示浮层：铺满 viewport、居中灰色文字、随尺寸变化同步。
+
+    用法：
+        label = EmptyStateLabel(widget.viewport())
+        label.setText("...")
+        label.show() / label.hide()
+    """
+
+    def __init__(self, viewport: QWidget, parent=None):
+        super().__init__(viewport)
+        self._viewport = viewport
+        self.setAlignment(Qt.AlignCenter)
+        self.setWordWrap(True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.refresh_theme()
+        viewport.installEventFilter(self)
+        self._sync_geometry()
+
+    def eventFilter(self, watched, event):
+        # viewport 尺寸变化（窗口拉伸、分栏拖动）时保持浮层铺满
+        if watched is self._viewport and event.type() == QEvent.Resize:
+            self._sync_geometry()
+        return False
+
+    def refresh_theme(self):
+        """主题切换后重取亮/暗次级文字色。"""
+        color = THEME_DARK["muted_text"] if isDarkTheme() else THEME["muted_text"]
+        self.setStyleSheet(
+            f"color: {color}; background: transparent; border: none;"
+        )
+
+    def set_text(self, text: str):
+        self.setText(text)
+        self._sync_geometry()
+
+    def _sync_geometry(self):
+        self.setGeometry(self._viewport.rect())
 
 
 def enable_mica(window: QWidget) -> bool:

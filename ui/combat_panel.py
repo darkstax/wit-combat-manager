@@ -27,7 +27,10 @@ from combat import (
     apply_status, clear_all_statuses, next_actor, advance_turn,
 )
 from persistence import save_combat_state, load_combat_state, delete_combat_state
-from ui.fluent import install_tab_fade, pulse, section_label, danger_button, info_box, warn_box, question_box
+from ui.fluent import (
+    install_tab_fade, pulse, section_label, danger_button,
+    info_box, warn_box, question_box, EmptyStateLabel,
+)
 
 
 class InitiativeRollDialog(QDialog):
@@ -413,6 +416,9 @@ class CombatPanel(QWidget):
         self.order_list.model().rowsMoved.connect(
             lambda *_: QTimer.singleShot(0, self._sync_order_from_list)
         )
+        self.order_placeholder = EmptyStateLabel(self.order_list.viewport())
+        self.order_placeholder.set_text("暂无行动顺序。添加单位后开始战斗。")
+        self.order_placeholder.hide()
         layout.addWidget(self.order_list, 1)
         self.set_rule_mode(self.rule_mode)
         self._update_operation_actions()
@@ -851,10 +857,8 @@ class CombatPanel(QWidget):
                 text = "未开始战斗——点击『开始战斗』后显示行动顺序"
             else:
                 text = "暂无行动顺序。添加单位后开始战斗。"
-            placeholder = QListWidgetItem(text)
-            # 只读提示：禁止选中/拖拽/编辑/作为拖放目标
-            placeholder.setFlags(Qt.NoItemFlags)
-            self.order_list.addItem(placeholder)
+            self.order_placeholder.set_text(text)
+            self.order_placeholder.show()
             self._refreshing_order = False
             return
         for i, uid in enumerate(self.combat_state.turn_order):
@@ -875,6 +879,7 @@ class CombatPanel(QWidget):
             if i == self.combat_state.now_index:
                 item.setBackground(QBrush(QColor(THEME["current_actor_bg"])))
             self.order_list.addItem(item)
+        self.order_placeholder.hide()
         self._refreshing_order = False
 
     def _sync_order_from_list(self):

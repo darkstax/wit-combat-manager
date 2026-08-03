@@ -13,6 +13,7 @@ from models import Unit, RuleMode, CombatState
 from ui.combat_panel import CombatPanel
 from ui.fluent import fade_in, install_tab_fade, motion_enabled, stop_animation
 from ui.unit_dialog import UnitDialog
+from ui.unit_panel import UnitPanel
 
 
 def _app():
@@ -197,25 +198,80 @@ def test_damage_modifiers_expand_resizes_splitter():
     splitter.close()
 
 
-def test_order_list_empty_state_placeholder_is_readonly():
-    """行动顺序为空时显示只读占位提示（不可选中/拖拽/编辑）。"""
+def test_order_list_empty_state_placeholder_overlay():
+    """行动顺序为空时显示居中灰色提示浮层（无占位 item），有数据时隐藏。"""
     _app()
     panel = CombatPanel()
+    panel.show()
     try:
-        # 未开始战斗（combat_state 为 None）：显示提示且无任何交互 flags
+        # 未开始战斗（combat_state 为 None）：浮层提示且列表无占位 item
         panel._refresh_order_list()
-        assert panel.order_list.count() == 1
-        item = panel.order_list.item(0)
-        assert "开始战斗" in item.text()
-        assert item.flags() == Qt.NoItemFlags
+        assert panel.order_list.count() == 0
+        assert panel.order_placeholder.isVisible()
+        assert "开始战斗" in panel.order_placeholder.text()
 
-        # combat_state 存在但 turn_order 为空：同样显示只读占位提示
+        # combat_state 存在但 turn_order 为空：同样显示浮层
         panel.combat_state = CombatState()
         panel._refresh_order_list()
-        assert panel.order_list.count() == 1
-        item = panel.order_list.item(0)
-        assert "开始战斗" in item.text()
-        assert item.flags() == Qt.NoItemFlags
+        assert panel.order_list.count() == 0
+        assert panel.order_placeholder.isVisible()
+        assert "开始战斗" in panel.order_placeholder.text()
+
+        # 有 turn_order 数据：浮层隐藏，列表正常填充
+        provider = UnitPanel()
+        provider.show()
+        units = [Unit(name="甲"), Unit(name="乙")]
+        provider.load_units(units)
+        panel.unit_provider = provider
+        panel.combat_state.turn_order = [u.unit_id for u in units]
+        panel.combat_state.now_index = 0
+        panel._refresh_order_list()
+        assert panel.order_list.count() == 2
+        assert not panel.order_placeholder.isVisible()
+        provider.close()
+    finally:
+        panel.close()
+        for _ in range(3):
+            QApplication.processEvents()
+
+
+def test_unit_tree_empty_state_placeholder():
+    """单位树为空时显示提示浮层，有单位后隐藏。"""
+    _app()
+    panel = UnitPanel()
+    panel.show()
+    try:
+        panel._refresh_tree()
+        assert panel.tree.topLevelItemCount() == 0
+        assert panel.tree_placeholder.isVisible()
+        assert "添加" in panel.tree_placeholder.text()
+
+        panel.load_units([Unit(name="测试单位")])
+        assert panel.tree.topLevelItemCount() == 1
+        assert not panel.tree_placeholder.isVisible()
+    finally:
+        panel.close()
+        for _ in range(3):
+            QApplication.processEvents()
+
+
+def test_unit_panel_rule_mode_combo_emits_change():
+    """单位面板的版本下拉框切换时发出 rule_mode_changed（值为 userData）。"""
+    _app()
+    panel = UnitPanel()
+    panel.show()
+    received = []
+    panel.rule_mode_changed.connect(received.append)
+    try:
+        assert panel.rule_mode_combo.currentData() == RuleMode.V1_2.value
+        index = panel.rule_mode_combo.findData(RuleMode.V0_3.value)
+        panel.rule_mode_combo.setCurrentIndex(index)
+        assert received == [RuleMode.V0_3.value]
+
+        # set_combo_rule_mode 外部同步不触发信号（防递归）
+        panel.set_combo_rule_mode(RuleMode.V1_2)
+        assert received == [RuleMode.V0_3.value]
+        assert panel.rule_mode_combo.currentData() == RuleMode.V1_2.value
     finally:
         panel.close()
         for _ in range(3):

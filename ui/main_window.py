@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QDialog, QApplication, QFrame, QStyle,
 )
 from qfluentwidgets import (
-    ComboBox,
     PushButton,
     RoundMenu,
     SmoothScrollArea,
@@ -186,7 +185,6 @@ class MainWindow(QMainWindow):
                 self._using_preview = True
         self.rule_mode = RuleMode.coerce(self.settings.get("rule_mode", RuleMode.V1_2))
         self.rosters = {mode.value: [] for mode in RuleMode}
-        self._changing_rule_mode = False
         self._loading_logs = False
         self.rule_browser = None
         self._safe_area_connected = False
@@ -227,17 +225,6 @@ class MainWindow(QMainWindow):
         command_layout.setSpacing(8)
         self._title_bar_layout = command_layout
 
-        self.rule_mode_combo = ComboBox()
-        self.rule_mode_combo.setToolTip("切换 0.3 / 1.2 规则与独立单位名单")
-        for mode in RuleMode:
-            self.rule_mode_combo.addItem(f"v{mode.value}", userData=mode.value)
-        self.rule_mode_combo.setCurrentIndex(
-            self.rule_mode_combo.findData(self.rule_mode.value)
-        )
-        self.rule_mode_combo.currentIndexChanged.connect(self._on_rule_mode_changed)
-        command_layout.addWidget(self.rule_mode_combo)
-        command_layout.addStretch()
-
         self.rule_browser_action = QAction("规则查询", self)
         self.rule_browser_action.setShortcut("Ctrl+K")
         self.rule_browser_action.triggered.connect(self._open_rule_browser)
@@ -247,6 +234,7 @@ class MainWindow(QMainWindow):
         query_btn.setIcon(standard_icon(self, QStyle.SP_FileDialogContentsView))
         query_btn.clicked.connect(self._open_rule_browser)
         command_layout.addWidget(query_btn)
+        command_layout.addStretch()
 
         self.more_menu = RoundMenu(title="", parent=self)
         self.more_menu.addAction(self.rule_browser_action)
@@ -289,6 +277,7 @@ class MainWindow(QMainWindow):
         self.splitter = QSplitter(Qt.Horizontal)
         self.unit_panel = UnitPanel()
         self.unit_panel.set_rule_mode(self.rule_mode)
+        self.unit_panel.rule_mode_changed.connect(self._on_rule_mode_changed)
         self.unit_panel.units_changed.connect(self._on_units_changed)
         self.splitter.addWidget(self.unit_panel)
 
@@ -360,6 +349,16 @@ class MainWindow(QMainWindow):
         except (TypeError, RuntimeError):
             pass
         qconfig.themeChangedFinished.connect(self._style_splitter_handles)
+        try:
+            qconfig.themeChangedFinished.disconnect(self._refresh_placeholder_themes)
+        except (TypeError, RuntimeError):
+            pass
+        qconfig.themeChangedFinished.connect(self._refresh_placeholder_themes)
+
+    def _refresh_placeholder_themes(self):
+        """主题切换后刷新列表/树空态占位浮层的灰色文字颜色。"""
+        self.unit_panel.tree_placeholder.refresh_theme()
+        self.combat_panel.order_placeholder.refresh_theme()
 
     def _style_splitter_handles(self):
         """为分栏分隔条着色，恢复全局 QSS 删除后消失的界面分界线。
@@ -559,11 +558,7 @@ class MainWindow(QMainWindow):
         store = load_rosters(default_rule_mode=self.rule_mode)
         self.rosters = store.rosters
         self.rule_mode = RuleMode.coerce(store.active_rule_mode)
-        self._changing_rule_mode = True
-        self.rule_mode_combo.setCurrentIndex(
-            self.rule_mode_combo.findData(self.rule_mode.value)
-        )
-        self._changing_rule_mode = False
+        self.unit_panel.set_combo_rule_mode(self.rule_mode)
         self.units = self.rosters[self.rule_mode.value]
         self.unit_panel.set_rule_mode(self.rule_mode)
         self.combat_panel.set_rule_mode(self.rule_mode)
@@ -597,19 +592,13 @@ class MainWindow(QMainWindow):
             f"友方: {a_count} | 怪物: {m_count} | 共 {len(self.units)} 单位"
         )
 
-    def _on_rule_mode_changed(self):
-        if self._changing_rule_mode:
-            return
-        requested = RuleMode.coerce(self.rule_mode_combo.currentData())
+    def _on_rule_mode_changed(self, _value=None):
+        requested = RuleMode.coerce(self.unit_panel.rule_mode_combo.currentData())
         if requested == self.rule_mode:
             return
         if self.combat_panel.combat_state and self.combat_panel.combat_state.active:
             info_box(self, "战斗进行中", "请先结束当前战斗，再切换规则版本。")
-            self._changing_rule_mode = True
-            self.rule_mode_combo.setCurrentIndex(
-                self.rule_mode_combo.findData(self.rule_mode.value)
-            )
-            self._changing_rule_mode = False
+            self.unit_panel.set_combo_rule_mode(self.rule_mode)
             return
 
         self.rosters[self.rule_mode.value] = self.units

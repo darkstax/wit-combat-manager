@@ -13,6 +13,7 @@ from qfluentwidgets import (
 from models import RuleMode, Unit, THEME, UNIT_TYPE_LABELS
 from ui.fluent import (
     fade_in, section_label, danger_button, info_box, warn_box, question_box,
+    EmptyStateLabel,
 )
 
 
@@ -136,6 +137,7 @@ class QuickImportDialog(QDialog):
 class UnitPanel(QWidget):
     units_changed = Signal(list)
     selection_changed = Signal(object)
+    rule_mode_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -153,6 +155,17 @@ class UnitPanel(QWidget):
         title.setObjectName("PageTitle")
         heading.addWidget(title)
         heading.addStretch()
+        self.rule_mode_combo = ComboBox()
+        self.rule_mode_combo.setToolTip("切换 0.3 / 1.2 规则与独立单位名单")
+        for mode in RuleMode:
+            self.rule_mode_combo.addItem(f"v{mode.value}", userData=mode.value)
+        self.rule_mode_combo.setCurrentIndex(
+            self.rule_mode_combo.findData(self.rule_mode.value)
+        )
+        self.rule_mode_combo.currentIndexChanged.connect(
+            self._on_combo_rule_mode_changed
+        )
+        heading.addWidget(self.rule_mode_combo)
         self.count_label = QLabel("0 个单位")
         self.count_label.setObjectName("SecondaryText")
         heading.addWidget(self.count_label)
@@ -184,6 +197,9 @@ class UnitPanel(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.currentItemChanged.connect(self._on_select)
+        self.tree_placeholder = EmptyStateLabel(self.tree.viewport())
+        self.tree_placeholder.set_text("点击『添加』创建单位，或使用 Excel 角色卡导入")
+        self.tree_placeholder.hide()
         layout.addWidget(self.tree, 3)
 
         self.detail_heading = section_label("单位信息")
@@ -273,6 +289,13 @@ class UnitPanel(QWidget):
                 for column in range(self.tree.columnCount()):
                     item.setBackground(column, brush)
             self.tree.addTopLevelItem(item)
+        empty = self.tree.topLevelItemCount() == 0
+        self.tree_placeholder.setVisible(empty)
+        if empty:
+            self.tree_placeholder.set_text(self.tree_placeholder.text())
+
+    def _on_combo_rule_mode_changed(self, _index):
+        self.rule_mode_changed.emit(self.rule_mode_combo.currentData())
 
     def get_selected_unit(self) -> Unit | None:
         item = self.tree.currentItem()
@@ -484,6 +507,15 @@ class UnitPanel(QWidget):
         if hasattr(self, "card_import_action"):
             self.card_import_action.setText(f"v{self.rule_mode.value} 角色卡")
         self._refresh_tree()
+
+    def set_combo_rule_mode(self, rule_mode: RuleMode | str):
+        """同步外部规则模式到下拉框（blockSignals 防递归，不触发 rule_mode_changed）。"""
+        value = RuleMode.coerce(rule_mode).value
+        index = self.rule_mode_combo.findData(value)
+        if index >= 0 and index != self.rule_mode_combo.currentIndex():
+            self.rule_mode_combo.blockSignals(True)
+            self.rule_mode_combo.setCurrentIndex(index)
+            self.rule_mode_combo.blockSignals(False)
 
     def commit_changes(self):
         """Refresh combat mutations and persist them through the public signal."""
