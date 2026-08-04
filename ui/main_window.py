@@ -38,6 +38,8 @@ from ui.fluent import (
 )
 
 BASE_DIR = str(writable_data_dir())
+# 应用版本号（与 git tag v2.2.1 对应），用于窗口标题栏展示
+APP_VERSION = "2.2.1"
 SETTINGS_PATH = os.path.join(BASE_DIR, "settings.json")
 COMBAT_LOG_PATH = os.path.join(BASE_DIR, "combat_log.txt")
 GM_LOG_PATH = os.path.join(BASE_DIR, "gm_log.txt")
@@ -163,7 +165,7 @@ class MainWindow(QMainWindow):
         apply_fluent_style(QApplication.instance())
         self.setObjectName("AppSurface")
         self.setAttribute(Qt.WA_ContentsMarginsRespectsSafeArea, False)
-        self.setWindowTitle("WIT 战斗管理器 - Walk In the Terra")
+        self.setWindowTitle(f"WIT 战斗管理器 - Walk In the Terra v{APP_VERSION}")
         self.resize(1180, 780)
         self.setMinimumSize(900, 620)
 
