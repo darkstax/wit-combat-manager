@@ -1,4 +1,5 @@
 import os
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -18,6 +19,18 @@ from ui.unit_panel import UnitPanel
 
 def _app():
     return QApplication.instance() or QApplication([])
+
+
+def _wait_until(predicate, timeout_ms: int = 2000, interval_ms: int = 10) -> None:
+    """轮询等待条件成立（PySide6 无 QTest.qWaitUntil）。
+
+    动画由事件循环驱动，固定时长等待在 CPU 高负载下不足（曾稳定 flaky）；
+    条件等待消除时序依赖，超时后由后续断言兜底。
+    """
+
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while not predicate() and time.monotonic() < deadline:
+        QTest.qWait(interval_ms)
 
 
 def test_motion_can_be_disabled(monkeypatch):
@@ -43,7 +56,9 @@ def test_fade_is_interruptible_and_restores_opacity(monkeypatch):
 
     fade_in(widget, duration=30, start_opacity=0.4)
     fade_in(widget, duration=30, start_opacity=0.6)
-    QTest.qWait(60)
+    # 动画由事件循环驱动：CPU 满负载下固定时长等待可能不足（曾 40% 概率
+    # flaky），改为条件等待动画清理完成，消除时序依赖
+    _wait_until(lambda: widget.graphicsEffect() is None)
 
     assert widget.graphicsEffect() is None
     assert getattr(widget, "_wit_opacity_animation", None) is None
@@ -65,7 +80,8 @@ def test_tab_fade_finishes_without_changing_layout(monkeypatch):
     install_tab_fade(tabs, duration=30)
 
     tabs.setCurrentIndex(1)
-    QTest.qWait(60)
+    # 同上：条件等待淡入动画清理完成，避免负载下时序 flaky
+    _wait_until(lambda: second.graphicsEffect() is None)
 
     assert tabs.currentWidget() is second
     assert second.graphicsEffect() is None
